@@ -1,0 +1,8 @@
+{
+  "dependencies": {
+    "fastify": "^4.23.2",
+    "jsonwebtoken": "^9.0.2",
+    "typia": "^5.0.4"
+  },
+  "type": "module"
+}
