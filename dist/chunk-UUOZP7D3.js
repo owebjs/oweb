@@ -1,0 +1,1 @@
+import{a as f}from"./chunk-XR5MHIBF.js";import{a}from"./chunk-2HA4XQFN.js";import{readdirSync as i,statSync as n}from"node:fs";import m from"node:path";var l=a((s,r=[])=>{let o=[];for(let t of i(s)){let e=m.join(s,t);n(e).isDirectory()?o.push(...l(e,[...r,t])):o.push({name:t,path:s,rel:f(...r,t),filePath:e})}return o},"walk");export{l as a};
