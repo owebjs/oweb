@@ -4,7 +4,7 @@ export default class {
      * @param {import("fastify").FastifyReply} res
      */
     handle(req, res, done) {
-        console.log('Hello from routes > _hooks.js');
+        console.log('Hello from routes > testroute > _hooks.js');
         done();
     }
 }
