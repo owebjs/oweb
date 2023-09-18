@@ -49,12 +49,12 @@ export const assignRoutes = async (directory: string, fastify: FastifyInstance) 
                         //callback
                         if (index + 1 == route.fileInfo.hooks.length) {
                             //means all of the hooks passed through
-                            new route.fn().handle(...arguments);
+                            new route.fn(...arguments).handle(...arguments);
                         }
                     });
                 }
             } else {
-                new route.fn().handle(...arguments);
+                new route.fn(...arguments).handle(...arguments);
             }
         });
     }
