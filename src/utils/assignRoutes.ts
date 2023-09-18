@@ -37,7 +37,7 @@ export const generateRoutes = async (files: WalkResult[]) => {
 };
 
 export const assignRoutes = async (directory: string, fastify: FastifyInstance) => {
-    const files = walk(directory);
+    const files = await walk(directory);
 
     console.log(files);
 
@@ -47,7 +47,14 @@ export const assignRoutes = async (directory: string, fastify: FastifyInstance) 
 
     for (const route of routes) {
         fastify[route.method](route.url, function () {
-            new route.fn(...arguments, fastify);
+
+           /* if(route.fileInfo.hooks.length) {
+            fastify.addHook('preValidation', async(req,res) => {
+
+            })
+            }*/
+
+            new route.fn(...arguments, fastify, route);
         });
     }
 };
