@@ -1,6 +1,7 @@
 import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { mergePaths } from './utils';
+import { fileURLToPath } from 'node:url';
 
 export interface WalkResult {
     name: string;
@@ -8,6 +9,9 @@ export interface WalkResult {
     rel: string;
     filePath: string;
 }
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 
 const isParentOrGrandparent = (parentFolderPath, childFolderPath) => {
     if (childFolderPath.startsWith(parentFolderPath)) {
@@ -23,7 +27,7 @@ const isParentOrGrandparent = (parentFolderPath, childFolderPath) => {
 
 const hookPaths = new Set();
 
-export const walk = (directory: string, tree = []): WalkResult[] => {
+export const walk = async(directory: string, tree = []): Promise<WalkResult[]> => {
     const results = [];
 
     const readDirPriority = readdirSync(directory);
@@ -50,7 +54,7 @@ export const walk = (directory: string, tree = []): WalkResult[] => {
         const fileStats = statSync(filePath);
 
         if (fileStats.isDirectory()) {
-            results.push(...walk(filePath, [...tree, fileName]));
+            results.push(...await walk(filePath, [...tree, fileName]));
         } else {
             const spread = [...hookPaths];
 
@@ -58,9 +62,25 @@ export const walk = (directory: string, tree = []): WalkResult[] => {
                 return isParentOrGrandparent(hookPath, directoryResolve);
             });
 
+            const hooksImport = hooks.map((hookPath: string) => new URL(
+                hookPath,
+                `file://${__dirname}`,
+            ).pathname.replaceAll('\\', '/') + "/_hooks.js");
+
+            const hookFunctions =  [];
+
+            for (const importPath of hooksImport) {
+                const imp = await import(importPath);
+                if(imp?.default) {
+                    hookFunctions.push(imp.default)
+                }
+            }
+
+
             results.push({
                 name: fileName,
                 path: directory,
+                hooks: hookFunctions,
                 rel: mergePaths(...tree, fileName),
                 filePath,
             });
