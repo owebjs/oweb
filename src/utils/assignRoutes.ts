@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import path from 'node:path';
-import { dirname } from 'node:path';
+import { dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRoutePath, buildRouteURL } from './utils.js';
 import { walk, type WalkResult } from './walk';
@@ -19,6 +19,8 @@ export const generateRoutes = async (files: WalkResult[]) => {
             `file://${__dirname}`,
         ).pathname.replaceAll('\\', '/');
 
+        console.log(packageURL);
+
         const routePath = buildRoutePath(parsedFile);
         const route = buildRouteURL(routePath);
         const def = await import(packageURL);
@@ -27,6 +29,7 @@ export const generateRoutes = async (files: WalkResult[]) => {
             url: route.url,
             method: route.method,
             fn: def?.default,
+            fileInfo: file,
         });
     }
 
@@ -36,11 +39,15 @@ export const generateRoutes = async (files: WalkResult[]) => {
 export const assignRoutes = async (directory: string, fastify: FastifyInstance) => {
     const files = walk(directory);
 
+    console.log(files);
+
     const routes = await generateRoutes(files);
+
+    console.log(routes);
 
     for (const route of routes) {
         fastify[route.method](route.url, function () {
-            new route.fn(...arguments);
+            new route.fn(...arguments, fastify);
         });
     }
 };

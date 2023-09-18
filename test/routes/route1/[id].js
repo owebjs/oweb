@@ -3,15 +3,14 @@ import { register } from '../../../dist/helpers/PluginRegistrar.js';
 
 export default class extends register(
     JwtAuth({
-        jwtSecret: 'testsecret',
+        secret: '',
         onError: (req, res) => {
             res.send('olmamis.');
         },
     }),
 ) {
-    constructor(req, res) {
-        super(req, res);
-        console.log(this.jwtResult);
+    constructor(req, res, app) {
+        super(req, res, app);
         res.send('deneme');
     }
 }
