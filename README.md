@@ -1,6 +1,6 @@
 # Oweb
 
-Flexible route handler that built on top of Fastify
+Flexible handler that built on top of Fastify
 
 ## Installation
 
