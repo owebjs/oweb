@@ -3,13 +3,13 @@ import jwt from 'jsonwebtoken';
 
 interface JwtAuthOptions {
     secret: string;
-    onError?: (req: FastifyRequest, res: FastifyReply, app: FastifyInstance) => void;
+    onError?: (req: FastifyRequest, res: FastifyReply) => void;
 }
 
 export const JwtAuth = ({ secret, onError }: JwtAuthOptions) => {
     return function (Base) {
         return class JWT extends Base {
-            constructor(req: FastifyRequest, res: FastifyReply, app: FastifyInstance) {
+            constructor(req: FastifyRequest, res: FastifyReply) {
                 super();
 
                 let token = req?.headers?.authorization;
@@ -23,7 +23,7 @@ export const JwtAuth = ({ secret, onError }: JwtAuthOptions) => {
                     try {
                         this.jwtResult = jwt.verify(token, secret);
                     } catch {
-                        if (onError) onError(req, res, app);
+                        if (onError) onError(req, res);
                     }
                 } else {
                     throw new Error('JWT Secret not provided!');

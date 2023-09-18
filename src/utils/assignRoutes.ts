@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import path from 'node:path';
 import { dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,8 +19,6 @@ export const generateRoutes = async (files: WalkResult[]) => {
             `file://${__dirname}`,
         ).pathname.replaceAll('\\', '/');
 
-        console.log(packageURL);
-
         const routePath = buildRoutePath(parsedFile);
         const route = buildRouteURL(routePath);
         const def = await import(packageURL);
@@ -39,22 +37,25 @@ export const generateRoutes = async (files: WalkResult[]) => {
 export const assignRoutes = async (directory: string, fastify: FastifyInstance) => {
     const files = await walk(directory);
 
-    console.log(files);
-
     const routes = await generateRoutes(files);
 
-    console.log(routes);
-
     for (const route of routes) {
-        fastify[route.method](route.url, function () {
-
-           /* if(route.fileInfo.hooks.length) {
-            fastify.addHook('preValidation', async(req,res) => {
-
-            })
-            }*/
-
-            new route.fn(...arguments, fastify, route);
+        fastify[route.method](route.url, function (req: FastifyRequest, res: FastifyReply) {
+            //assign hooks if exists
+            if (route.fileInfo.hooks.length) {
+                for (let index = 0; index < route.fileInfo.hooks.length; index++) {
+                    const hookFun = route.fileInfo.hooks[index];
+                    new hookFun().handle(req, res, () => {
+                        //callback
+                        if (index + 1 == route.fileInfo.hooks.length) {
+                            //means all of the hooks passed through
+                            new route.fn().handle(...arguments);
+                        }
+                    });
+                }
+            } else {
+                new route.fn().handle(...arguments);
+            }
         });
     }
 };
