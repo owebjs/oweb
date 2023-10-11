@@ -8,7 +8,7 @@
         "start": "node .",
         "build": "tsup",
         "dev": "tsup && node .",
-        "test": "tsup && node test/index.js",
+        "test": "tsup && node scripts/copyBinaries && node test/index.js",
         "format": "prettier --write . --ignore-path .gitignore"
     },
     "keywords": [],
@@ -16,7 +16,6 @@
     "license": "MIT",
     "dependencies": {
         "fastify": "^4.23.2",
-        "jose": "^4.14.6",
         "jsonwebtoken": "^9.0.2"
     },
     "devDependencies": {
@@ -26,7 +25,8 @@
         "prettier": "^3.0.3",
         "tslib": "^2.6.2",
         "tsup": "^7.2.0",
-        "typescript": "^5.2.2"
+        "typescript": "^5.2.2",
+        "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.10.0"
     },
     "type": "module"
 }

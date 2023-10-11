@@ -1,16 +1,9 @@
 lockfileVersion: '6.0'
 
-settings:
-  autoInstallPeers: true
-  excludeLinksFromLockfile: false
-
 dependencies:
   fastify:
     specifier: ^4.23.2
     version: 4.23.2
-  jose:
-    specifier: ^4.14.6
-    version: 4.14.6
   jsonwebtoken:
     specifier: ^9.0.2
     version: 9.0.2
@@ -37,6 +30,9 @@ devDependencies:
   typescript:
     specifier: ^5.2.2
     version: 5.2.2
+  uWebSockets.js:
+    specifier: github:uNetworking/uWebSockets.js#v20.10.0
+    version: github.com/uNetworking/uWebSockets.js/806df48c9da86af7b3341f3e443388c7cd15c3de
 
 packages:
 
@@ -884,10 +880,6 @@ packages:
     resolution: {integrity: sha512-RHxMLp9lnKHGHRng9QFhRCMbYAcVpn69smSGcq3f36xjgVVWThj4qqLbTLlq7Ssj8B+fIQ1EuCEGI2lKsyQeIw==}
     dev: true
 
-  /jose@4.14.6:
-    resolution: {integrity: sha512-EqJPEUlZD0/CSUMubKtMaYUOtWe91tZXTWMJZoKSbLk+KtdhNdcvppH8lA9XwVu2V4Ailvsj0GBZJ2ZwDjfesQ==}
-    dev: false
-
   /joycon@3.1.1:
     resolution: {integrity: sha512-34wB/Y7MW7bzjKRjUKTa46I2Z7eV62Rkhva+KkopW7Qvv/OSWBqvkSY7vusOPrNuZcUG3tApvdVgNB8POj3SPw==}
     engines: {node: '>=10'}
@@ -1452,3 +1444,13 @@ packages:
     resolution: {integrity: sha512-N/lyzTPaJasoDmfV7YTrYCI0G/3ivm/9wdG0aHuheKowWQwGTsK0Eoiw6utmzAnI6pkJa0DUVygvp3spqqEKXg==}
     engines: {node: '>= 14'}
     dev: true
+
+  github.com/uNetworking/uWebSockets.js/806df48c9da86af7b3341f3e443388c7cd15c3de:
+    resolution: {tarball: https://codeload.github.com/uNetworking/uWebSockets.js/tar.gz/806df48c9da86af7b3341f3e443388c7cd15c3de}
+    name: uWebSockets.js
+    version: 20.10.0
+    dev: true
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false

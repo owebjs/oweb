@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-    target: "esnext",
+    target: 'esnext',
     dts: {
         resolve: true,
         entry: './src/index.ts',
@@ -13,4 +13,5 @@ export default defineConfig({
     splitting: true,
     minify: true,
     config: 'tsconfig.json',
+    external: ['uWebSockets.js'],
 });
