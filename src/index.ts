@@ -1,4 +1,8 @@
-import Fastify, { FastifyInstance as _FastifyInstance } from 'fastify';
+import Fastify, {
+    type FastifyServerOptions,
+    type FastifyInstance,
+    type FastifyListenOptions,
+} from 'fastify';
 import { assignRoutes } from './utils/assignRoutes';
 import serverimp from './uwebsocket/server';
 
@@ -9,45 +13,37 @@ const serverFactory = (handler, opts) => {
     return server;
 };
 
-let app = Fastify();
-
-interface FastifyInstance extends _FastifyInstance {}
-
-interface ListenOptions {
-    port: string | number;
-    host?: string;
+export interface OwebOptions extends FastifyServerOptions {
+    uWebSocketsEnabled?: boolean;
 }
 
-interface OwebOptions {
-    uWebSocketsEnabled: boolean;
+export interface LoadRoutesOptions {
+    directory: string;
 }
 
-class FastifyInstance {
-    constructor() {
-        Object.assign(this, app);
-    }
-}
+interface _FastifyInstance extends FastifyInstance {}
+class _FastifyInstance {}
 
-export default class Oweb extends FastifyInstance {
-    constructor(options: OwebOptions = { uWebSocketsEnabled: false }) {
+export default class Oweb extends _FastifyInstance {
+    public constructor(options: OwebOptions = {}) {
         super();
-        if (options?.uWebSocketsEnabled) {
-            //@ts-ignore
-            app = Fastify({
-                //@ts-ignore
-                serverFactory,
-            });
+
+        const _options: OwebOptions = options ?? {};
+
+        if (_options.uWebSocketsEnabled) {
+            _options.serverFactory = serverFactory as any;
         }
+
+        Object.assign(this, Fastify(_options));
     }
 
-    loadRoutes({ routeDir }) {
-        //@ts-ignore
-        return assignRoutes(routeDir, app);
+    public loadRoutes({ directory }: LoadRoutesOptions) {
+        return assignRoutes(directory, this);
     }
 
-    start(listenOptions: ListenOptions = { port: 3000, host: '127.0.0.1' }) {
-        return new Promise((resolve) => {
-            app.listen({ port: +listenOptions.port }, resolve);
+    public start(listenOptions: FastifyListenOptions = { port: 3000, host: '127.0.0.1' }) {
+        return new Promise<{ err: Error; address: string }>((resolve) => {
+            this.listen({ port: +listenOptions.port }, (err, address) => resolve({ err, address }));
         });
     }
 }
