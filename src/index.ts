@@ -4,14 +4,6 @@ import Fastify, {
     type FastifyListenOptions,
 } from 'fastify';
 import { assignRoutes } from './utils/assignRoutes';
-import serverimp from './uwebsocket/server';
-
-const server = serverimp({});
-
-const serverFactory = (handler, opts) => {
-    server.on('request', handler);
-    return server;
-};
 
 export interface OwebOptions extends FastifyServerOptions {
     uWebSocketsEnabled?: boolean;
@@ -25,16 +17,33 @@ interface _FastifyInstance extends FastifyInstance {}
 class _FastifyInstance {}
 
 export default class Oweb extends _FastifyInstance {
+    #_options: OwebOptions = {};
     public constructor(options: OwebOptions = {}) {
         super();
 
         const _options: OwebOptions = options ?? {};
 
-        if (_options.uWebSocketsEnabled) {
-            _options.serverFactory = serverFactory as any;
-        }
+        this.#_options = _options;
+    }
 
-        Object.assign(this, Fastify(_options));
+    public async setup() {
+        return new Promise(async (resolve) => {
+            if (this.#_options.uWebSocketsEnabled) {
+                const serverimp = (await import('./uwebsocket/server')).default;
+
+                const server = await serverimp({});
+                (this.#_options.serverFactory as any) = (handler, opts) => {
+                    server.on('request', handler);
+                    return server;
+                };
+
+                Object.assign(this, Fastify(this.#_options));
+                resolve(true);
+            } else {
+                Object.assign(this, Fastify(this.#_options));
+                resolve(true);
+            }
+        });
     }
 
     public loadRoutes({ directory }: LoadRoutesOptions) {

@@ -1,18 +1,19 @@
-import uWS from 'uWebSockets.js';
 import { EventEmitter } from 'node:events';
-import { createRequire } from 'node:module';
 const REQUEST_EVENT = 'request';
 
 import HttpRequest from './request';
 import HttpResponse from './response';
 
-export default function ({
+export default async function ({
     cert_file_name,
     key_file_name,
 }: {
     cert_file_name?: string;
     key_file_name?: string;
 }) {
+    let uWS;
+    uWS = (await import('uWebSockets.js')).default;
+
     let appType = 'App';
 
     if (cert_file_name && key_file_name) {
