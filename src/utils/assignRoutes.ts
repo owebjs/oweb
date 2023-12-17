@@ -4,6 +4,7 @@ import { dirname, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRoutePath, buildRouteURL } from './utils.js';
 import { walk, type WalkResult } from './walk';
+import Oweb from '../index.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,10 +24,12 @@ export const generateRoutes = async (files: WalkResult[]) => {
         const route = buildRouteURL(routePath);
         const def = await import(packageURL);
 
+        const routeFuncs = def.default;
+
         routes.push({
             url: route.url,
             method: route.method,
-            fn: def?.default,
+            fn: routeFuncs,
             fileInfo: file,
         });
     }
@@ -34,13 +37,39 @@ export const generateRoutes = async (files: WalkResult[]) => {
     return routes;
 };
 
-export const assignRoutes = async (directory: string, fastify: FastifyInstance) => {
+export const assignRoutes = async (directory: string, oweb: Oweb) => {
     const files = await walk(directory);
 
     const routes = await generateRoutes(files);
 
     for (const route of routes) {
-        fastify[route.method](route.url, function (req: FastifyRequest, res: FastifyReply) {
+        oweb[route.method](route.url, function (req: FastifyRequest, res: FastifyReply) {
+            const routeFunc = new route.fn(...arguments);
+
+            const handle = () => {
+                if (routeFunc.handle.constructor.name == 'AsyncFunction') {
+                    routeFunc.handle(...arguments).catch((error) => {
+                        const handleErrorArgs = [...arguments, error];
+                        if (routeFunc?.handleError) {
+                            routeFunc.handleError(...handleErrorArgs);
+                        } else {
+                            oweb._options.OWEB_INTERNAL_ERROR_HANDLER(...handleErrorArgs);
+                        }
+                    });
+                } else {
+                    try {
+                        routeFunc.handle(...arguments);
+                    } catch (error) {
+                        const handleErrorArgs = [...arguments, error];
+                        if (routeFunc?.handleError) {
+                            routeFunc.handleError(...handleErrorArgs);
+                        } else {
+                            oweb._options.OWEB_INTERNAL_ERROR_HANDLER(...handleErrorArgs);
+                        }
+                    }
+                }
+            };
+
             //assign hooks if exists
             if (route.fileInfo.hooks.length) {
                 for (let index = 0; index < route.fileInfo.hooks.length; index++) {
@@ -49,12 +78,13 @@ export const assignRoutes = async (directory: string, fastify: FastifyInstance) 
                         //callback
                         if (index + 1 == route.fileInfo.hooks.length) {
                             //means all of the hooks passed through
-                            new route.fn(...arguments).handle(...arguments);
+
+                            handle();
                         }
                     });
                 }
             } else {
-                new route.fn(...arguments).handle(...arguments);
+                handle();
             }
         });
     }
