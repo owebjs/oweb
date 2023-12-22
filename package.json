@@ -1,7 +1,7 @@
 {
     "name": "owebjs",
     "version": "1.0.7",
-    "description": "",
+    "description": "Flexible handler that built on top of Fastify",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
     "scripts": {
