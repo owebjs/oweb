@@ -1,4 +1,4 @@
-import { FastifyReply, FastifyRequest } from 'fastify';
+import { FastifyReply, FastifyRequest } from '../index';
 import type { Awaitable } from '../types';
 
 export declare interface Route {
