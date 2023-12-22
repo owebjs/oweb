@@ -1,10 +1,10 @@
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyRequest, FastifyReply } from 'fastify';
 import path from 'node:path';
-import { dirname, sep } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildRoutePath, buildRouteURL } from './utils.js';
+import { buildRoutePath, buildRouteURL } from './utils';
 import { walk, type WalkResult } from './walk';
-import Oweb from '../index.js';
+import { Oweb } from '../index';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

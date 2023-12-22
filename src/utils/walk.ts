@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { mergePaths } from './utils';
-import { fileURLToPath } from 'node:url';
 
 export interface WalkResult {
     name: string;
@@ -12,7 +12,7 @@ export interface WalkResult {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const isParentOrGrandparent = (parentFolderPath, childFolderPath) => {
+const isParentOrGrandparent = (parentFolderPath: string, childFolderPath: string) => {
     if (childFolderPath.startsWith(parentFolderPath)) {
         const relativePath = path.relative(parentFolderPath, childFolderPath);
 
