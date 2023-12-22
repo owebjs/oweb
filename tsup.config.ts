@@ -11,7 +11,24 @@ export default defineConfig({
     clean: true,
     format: 'esm',
     splitting: true,
-    minify: true,
+    minify: false,
     config: 'tsconfig.json',
     external: ['uWebSockets.js'],
+    bundle: false,
+    plugins: [
+        {
+            name: 'fix-imports',
+            renderChunk(_, chunk) {
+                const code = chunk.code.replace(/from ['"](.*)['"]/g, (match, path) => {
+                    if (path.startsWith('.') && !path.endsWith('.js')) {
+                        return `from '${path}.js'`;
+                    }
+
+                    return match;
+                });
+
+                return { code };
+            },
+        },
+    ],
 });
