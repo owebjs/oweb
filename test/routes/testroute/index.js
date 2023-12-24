@@ -1,6 +1,6 @@
 import { Route } from '../../../dist/index.js';
 
-export default class {
+export default class extends Route {
     /**
      * @param {import("fastify").FastifyRequest} req
      * @param {import("fastify").FastifyReply} res
