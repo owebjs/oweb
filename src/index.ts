@@ -104,3 +104,4 @@ export type {
     FastifyServerFactoryHandler,
 } from 'fastify/types/serverFactory';
 export type { FastifyTypeProvider, FastifyTypeProviderDefault } from 'fastify/types/type-provider';
+export type { HTTPMethods } from 'fastify/types/utils';
