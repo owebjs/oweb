@@ -39,53 +39,56 @@ export const generateRoutes = async (files: WalkResult[]) => {
 
 export const assignRoutes = async (directory: string, oweb: Oweb) => {
     const files = await walk(directory);
-
     const routes = await generateRoutes(files);
 
     for (const route of routes) {
-        oweb[route.method](route.url, function (req: FastifyRequest, res: FastifyReply) {
-            const routeFunc = new route.fn(...arguments);
+        const routeFunc = new route.fn();
 
-            const handle = () => {
-                if (routeFunc.handle.constructor.name == 'AsyncFunction') {
-                    routeFunc.handle(...arguments).catch((error) => {
-                        const handleErrorArgs = [...arguments, error];
-                        if (routeFunc?.handleError) {
-                            routeFunc.handleError(...handleErrorArgs);
-                        } else {
-                            oweb._options.OWEB_INTERNAL_ERROR_HANDLER(...handleErrorArgs);
-                        }
-                    });
-                } else {
-                    try {
-                        routeFunc.handle(...arguments);
-                    } catch (error) {
-                        const handleErrorArgs = [...arguments, error];
-                        if (routeFunc?.handleError) {
-                            routeFunc.handleError(...handleErrorArgs);
-                        } else {
-                            oweb._options.OWEB_INTERNAL_ERROR_HANDLER(...handleErrorArgs);
+        oweb[route.method](
+            route.url,
+            routeFunc._options,
+            function (req: FastifyRequest, res: FastifyReply) {
+                const handle = () => {
+                    if (routeFunc.handle.constructor.name == 'AsyncFunction') {
+                        routeFunc.handle(...arguments).catch((error) => {
+                            const handleErrorArgs = [...arguments, error];
+                            if (routeFunc?.handleError) {
+                                routeFunc.handleError(...handleErrorArgs);
+                            } else {
+                                oweb._options.OWEB_INTERNAL_ERROR_HANDLER(...handleErrorArgs);
+                            }
+                        });
+                    } else {
+                        try {
+                            routeFunc.handle(...arguments);
+                        } catch (error) {
+                            const handleErrorArgs = [...arguments, error];
+                            if (routeFunc?.handleError) {
+                                routeFunc.handleError(...handleErrorArgs);
+                            } else {
+                                oweb._options.OWEB_INTERNAL_ERROR_HANDLER(...handleErrorArgs);
+                            }
                         }
                     }
-                }
-            };
+                };
 
-            //assign hooks if exists
-            if (route.fileInfo.hooks.length) {
-                for (let index = 0; index < route.fileInfo.hooks.length; index++) {
-                    const hookFun = route.fileInfo.hooks[index];
-                    new hookFun().handle(req, res, () => {
-                        //callback
-                        if (index + 1 == route.fileInfo.hooks.length) {
-                            //means all of the hooks passed through
+                //assign hooks if exists
+                if (route.fileInfo.hooks.length) {
+                    for (let index = 0; index < route.fileInfo.hooks.length; index++) {
+                        const hookFun = route.fileInfo.hooks[index];
+                        new hookFun().handle(req, res, () => {
+                            //callback
+                            if (index + 1 == route.fileInfo.hooks.length) {
+                                //means all of the hooks passed through
 
-                            handle();
-                        }
-                    });
+                                handle();
+                            }
+                        });
+                    }
+                } else {
+                    handle();
                 }
-            } else {
-                handle();
-            }
-        });
+            },
+        );
     }
 };

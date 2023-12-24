@@ -21,6 +21,7 @@ class _FastifyInstance {}
 
 export class Oweb extends _FastifyInstance {
     public _options: OwebOptions = {};
+
     public constructor(options?: OwebOptions) {
         super();
 

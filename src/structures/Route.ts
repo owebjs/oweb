@@ -1,4 +1,4 @@
-import { FastifyReply, FastifyRequest } from '../index';
+import type { FastifyReply, FastifyRequest, RouteShorthandOptions } from '../index';
 import type { Awaitable } from '../types';
 
 export declare interface Route {
@@ -7,6 +7,12 @@ export declare interface Route {
 }
 
 export abstract class Route {
+    public _options: RouteShorthandOptions = {};
+
+    public constructor(options?: RouteShorthandOptions) {
+        this._options = options ?? {};
+    }
+
     public handle() {
         throw new Error('Route#handle must be implemented');
     }
