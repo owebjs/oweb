@@ -48,7 +48,14 @@ export class Oweb extends _FastifyInstance {
             };
         }
 
-        return Object.assign(this, Fastify(this._options));
+        const fastifyInstance = Object.assign(this, Fastify(this._options));
+
+        this.addHook('onRequest', (_, res, done) => {
+            res.header('X-Powered-By', 'Oweb');
+            done();
+        });
+
+        return fastifyInstance;
     }
 
     public loadRoutes({ directory }: LoadRoutesOptions) {
