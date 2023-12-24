@@ -46,7 +46,7 @@ export const assignRoutes = async (directory: string, oweb: Oweb) => {
 
         oweb[route.method](
             route.url,
-            routeFunc._options,
+            routeFunc._options || {},
             function (req: FastifyRequest, res: FastifyReply) {
                 const handle = () => {
                     if (routeFunc.handle.constructor.name == 'AsyncFunction') {
