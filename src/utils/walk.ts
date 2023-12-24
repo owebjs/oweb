@@ -45,6 +45,7 @@ export const walk = async (directory: string, tree = []): Promise<WalkResult[]> 
         const filePath = path.join(directory, fileName);
         const directoryResolve = path.resolve(directory);
 
+        //if it's a hook which it's path is routes/_hooks.js
         if (fileName == '_hooks.js' || fileName == '_hooks.ts') {
             hookPaths.add(directoryResolve);
             continue;
@@ -58,10 +59,28 @@ export const walk = async (directory: string, tree = []): Promise<WalkResult[]> 
             const spread = [...hookPaths];
 
             const hooks = spread.filter((hookPath: string) => {
-                return isParentOrGrandparent(hookPath, directoryResolve);
+                const ren = isParentOrGrandparent(hookPath, directoryResolve);
+                return ren;
             });
 
-            const hooksImport = hooks.map(
+            const copyHooks = [hooks].flat(); //using toSorted would be great if it support node 16 and beyond
+            let scopingSort = copyHooks.sort((a: string, b: string) => b.length - a.length); //sort nearest
+
+            const scopeIndex = scopingSort.findIndex((path: string) => {
+                const lastdir = path.split('\\').at(-1);
+                return lastdir.startsWith('(') && lastdir.endsWith(')');
+            });
+
+            let useHook = [];
+
+            if (scopeIndex > -1) {
+                scopingSort.length = scopeIndex + 1;
+                useHook = scopingSort;
+            } else {
+                useHook = hooks;
+            }
+
+            const hooksImport = useHook.map(
                 (hookPath: string) =>
                     new URL(hookPath, `file://${__dirname}`).pathname.replaceAll('\\', '/') +
                     '/_hooks.js',

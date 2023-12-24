@@ -34,9 +34,21 @@ export const buildRoutePath = (parsedFile: ParsedPath) => {
 };
 
 export const buildRouteURL = (path: string) => {
+    const paths = path.split('/');
+
+    //remove paranthesis used to group hooks to normalize the path
+    const normalizedPath = paths
+        .map((x) => {
+            if (x.startsWith('(') && x.endsWith(')')) {
+                x = x.slice(1, -1);
+            }
+            return x;
+        })
+        .join('/');
+
     let method = 'get';
 
-    const paramURL = convertParamSyntax(path);
+    const paramURL = convertParamSyntax(normalizedPath);
     let url = convertCatchallSyntax(paramURL);
 
     for (const m of ['.DELETE', '.POST', '.PATCH', '.GET', '.PUT']) {
