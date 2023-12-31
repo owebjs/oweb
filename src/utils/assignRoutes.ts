@@ -37,7 +37,7 @@ export const generateRoutes = async (files: WalkResult[]) => {
     return routes;
 };
 
-export const assignRoutes = async (directory: string, oweb: Oweb) => {
+export const assignRoutes = async (oweb: Oweb, directory: string) => {
     const files = await walk(directory);
     const routes = await generateRoutes(files);
 
