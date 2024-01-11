@@ -68,9 +68,9 @@ export class Oweb extends _FastifyInstance {
         this._options.OWEB_INTERNAL_ERROR_HANDLER = errorHandlerCallback;
     }
 
-    public start(options: FastifyListenOptions = { port: 3000, host: '127.0.0.1' }) {
+    public start({ port = 3000, host = '127.0.0.1' }: FastifyListenOptions) {
         return new Promise<{ err: Error; address: string }>((resolve) => {
-            this.listen({ port: +options.port }, (err, address) => resolve({ err, address }));
+            this.listen({ port, host }, (err, address) => resolve({ err, address }));
         });
     }
 }

@@ -11,7 +11,7 @@
         "ignoreDeprecations": "5.0",
         "lib": ["ESNext"],
         "module": "ESNext",
-        "moduleResolution": "Node",
+        "moduleResolution": "Bundler",
         "newLine": "lf",
         "noEmitHelpers": true,
         "noFallthroughCasesInSwitch": true,
