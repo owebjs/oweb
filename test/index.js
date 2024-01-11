@@ -1,6 +1,6 @@
 import Oweb from '../dist/index.js';
 
-const app = new Oweb({ uWebSocketsEnabled: false });
+let app = new Oweb({ uWebSocketsEnabled: false });
 
 app.setInternalErrorHandler((req, res, err) => {
     res.status(500).send({
@@ -9,7 +9,8 @@ app.setInternalErrorHandler((req, res, err) => {
     });
 });
 
-await app.setup();
+app = await app.setup();
+
 await app.loadRoutes({ directory: 'test/routes' });
 await app.start({ port: 3000 });
 
