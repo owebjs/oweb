@@ -1,6 +1,13 @@
 import Oweb from '../dist/index.js';
+import fastifyMultipart from '@fastify/multipart';
 
-let app = new Oweb({ uWebSocketsEnabled: false });
+const app = await new Oweb({ uWebSocketsEnabled: false }).setup();
+
+await app.register(fastifyMultipart, {
+    limits: {
+        fileSize: 20 * 1024 * 1024,
+    },
+});
 
 app.setInternalErrorHandler((req, res, err) => {
     res.status(500).send({
@@ -8,8 +15,6 @@ app.setInternalErrorHandler((req, res, err) => {
         error: err.message,
     });
 });
-
-app = await app.setup();
 
 await app.loadRoutes({ directory: 'test/routes' });
 await app.start({ port: 3000 });

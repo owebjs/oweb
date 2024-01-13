@@ -1,1 +1,1 @@
-export { default as ChunkUpload } from './ChunkUpload';
+export * from './ChunkUpload';
