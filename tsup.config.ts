@@ -4,7 +4,7 @@ export default defineConfig({
     target: 'esnext',
     dts: {
         resolve: true,
-        entry: './src/index.ts',
+        entry: ['./src/index.ts', './src/plugins/index.ts'],
     },
     keepNames: true,
     entryPoints: ['./src/**/*.ts'],
