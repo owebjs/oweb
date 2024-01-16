@@ -24,16 +24,16 @@ export interface ChunkUploadOptions {
 }
 
 export interface ChunkUploadResult {
-    statusCode: ChunkUploadStatusCode;
+    status: ChunkUploadStatus;
     uploadCompleted?: true;
     currentChunk?: number;
 }
 
-export enum ChunkUploadStatusCode {
-    Success = 200,
-    FileTooLarge = 413,
-    ChunkTooLarge = 413,
-    InvalidChunk = 400,
+export enum ChunkUploadStatus {
+    Success = 'SUCCESS',
+    FileTooLarge = 'FILE_TOO_LARGE',
+    ChunkTooLarge = 'CHUNK_TOO_LARGE',
+    InvalidChunk = 'INVALID_CHUNK',
 }
 
 export async function ChunkUpload(
@@ -50,11 +50,11 @@ export async function ChunkUpload(
         totalChunks < 1 ||
         currentChunk > totalChunks
     ) {
-        return { statusCode: ChunkUploadStatusCode.InvalidChunk };
+        return { status: ChunkUploadStatus.InvalidChunk };
     }
 
     if (buffer.length > maxChunkSize) {
-        return { statusCode: ChunkUploadStatusCode.ChunkTooLarge };
+        return { status: ChunkUploadStatus.ChunkTooLarge };
     }
 
     const filePath = nodePath.join(path, fileName);
@@ -74,15 +74,15 @@ export async function ChunkUpload(
 
         if (typeof maxFileSize === 'number' && fileSize > maxFileSize) {
             fs.unlinkSync(filePath);
-            return { statusCode: ChunkUploadStatusCode.FileTooLarge };
+            return { status: ChunkUploadStatus.FileTooLarge };
         }
 
-        return { statusCode: ChunkUploadStatusCode.Success, uploadCompleted: true };
+        return { status: ChunkUploadStatus.Success, uploadCompleted: true };
     } else if (currentChunk === 1) {
         fs.writeFileSync(chunkPath, buffer);
     } else {
         fs.appendFileSync(chunkPath, buffer);
     }
 
-    return { statusCode: ChunkUploadStatusCode.Success, currentChunk };
+    return { status: ChunkUploadStatus.Success, currentChunk };
 }
