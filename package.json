@@ -10,7 +10,7 @@
             "default": "./dist/index.js",
             "types": "./dist/index.d.ts"
         },
-        "./plugins": {
+        "./dist/plugins": {
             "import": "./dist/plugins/index.js",
             "default": "./dist/plugins/index.js",
             "types": "./dist/plugins/index.d.ts"
