@@ -18,8 +18,10 @@ app.setInternalErrorHandler((req, res, err) => {
 
 await app.loadRoutes({
     directory: 'test/routes',
+    matchersDirectory: 'test/matchers',
     hmr: {
         enabled: true,
+        matchersDirectory: 'test/matchers',
         directory: 'test/routes',
     },
 });

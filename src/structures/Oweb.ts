@@ -6,8 +6,8 @@ import Fastify, {
     type FastifyReply,
     type RawServerDefault,
 } from 'fastify';
-import { applyHMR, assignRoutes } from '../utils/assignRoutes';
-import { watchRoutes } from '../utils/watchRoutes';
+import { applyMatcherHMR, applyRouteHMR, assignRoutes } from '../utils/assignRoutes';
+import { watchDirectory } from '../utils/watcher';
 import { info, success, warn } from '../utils/logger';
 
 export interface OwebOptions extends FastifyServerOptions {
@@ -17,11 +17,13 @@ export interface OwebOptions extends FastifyServerOptions {
 
 export interface LoadRoutesOptions {
     directory: string;
+    matchersDirectory?: string;
     hmr?: {
         /**
          * The directory to watch for changes. If not specified, it will use the routes directory.
          */
         directory?: string;
+        matchersDirectory?: string;
         enabled: boolean;
     };
 }
@@ -32,6 +34,7 @@ class _FastifyInstance {}
 export class Oweb extends _FastifyInstance {
     public _options: OwebOptions = {};
     private hmrDirectory: string;
+    private hmrMatchersDirectory: string;
     public routes: Map<string, any> = new Map();
 
     public constructor(options?: OwebOptions) {
@@ -94,15 +97,19 @@ export class Oweb extends _FastifyInstance {
     /**
      * Loads routes from a directory.
      * @param options.directory The directory to load routes from.
+     * @param options.matchersDirectory The directory to load matchers from.
      * @param options.hmr Configuration for Hot Module Replacement.
      * @param options.hmr.enabled Whether to enable HMR. HMR is disabled if NODE_ENV is set to production.
-     * @param options.hmr.directory The directory to watch for changes. If not specified, it will use the routes directory.
+     * @param options.hmr.directory The directory to watch for route changes. If not specified, it will use the routes directory.
+     * @param options.hmr.matchersDirectory The directory to watch for matcher changes. If not specified, it will use the matchers directory.
      */
-    public loadRoutes({ directory, hmr }: LoadRoutesOptions) {
+    public loadRoutes({ directory, matchersDirectory, hmr }: LoadRoutesOptions) {
         if (hmr && !hmr.directory) hmr.directory = directory;
+        if (hmr && !hmr.matchersDirectory) hmr.matchersDirectory = matchersDirectory;
 
         if (hmr?.enabled) {
             this.hmrDirectory = hmr.directory;
+            this.hmrMatchersDirectory = hmr.matchersDirectory;
             success(`Hot Module Replacement enabled. Watching changes in ${hmr.directory}`, 'HMR');
         } else {
             warn(
@@ -111,7 +118,7 @@ export class Oweb extends _FastifyInstance {
             );
         }
 
-        return assignRoutes(this, directory);
+        return assignRoutes(this, directory, matchersDirectory);
     }
 
     /**
@@ -119,9 +126,15 @@ export class Oweb extends _FastifyInstance {
      * Watches for changes in the routes directory
      */
     private watch() {
-        return watchRoutes(this.hmrDirectory, (op, path, content) => {
-            applyHMR(this, op, this.hmrDirectory, path, content);
+        watchDirectory(this.hmrDirectory, true, (op, path, content) => {
+            applyRouteHMR(this, op, this.hmrDirectory, path, content);
         });
+
+        if (this.hmrMatchersDirectory) {
+            watchDirectory(this.hmrMatchersDirectory, true, (op, path, content) => {
+                applyMatcherHMR(this, op, this.hmrMatchersDirectory, path, content);
+            });
+        }
     }
 
     /**

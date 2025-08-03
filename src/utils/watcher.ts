@@ -3,14 +3,15 @@ import { readFileSync } from 'fs';
 
 export type HMROperations = 'new-file' | 'delete-file' | 'modify-file';
 
-export function watchRoutes(
+export function watchDirectory(
     dir: string,
+    ignoreInitial: boolean = true,
     onUpdate: (op: HMROperations, path: string, content: string) => void,
 ) {
     const watcher = chokidar.watch(dir, {
         ignored: /([/\\]\.)|(node_modules)|(dist)/,
         persistent: true,
-        ignoreInitial: true,
+        ignoreInitial,
         awaitWriteFinish: {
             stabilityThreshold: 150,
             pollInterval: 50,

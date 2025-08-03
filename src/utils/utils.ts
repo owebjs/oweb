@@ -51,6 +51,24 @@ export const buildRouteURL = (path: string) => {
     const paramURL = convertParamSyntax(normalizedPath);
     let url = convertCatchallSyntax(paramURL);
 
+    const matcherSplit = url.split('/');
+    const matcherFilter = matcherSplit.filter((x) => x.startsWith(':'));
+
+    const matchers = matcherFilter
+        .map((x) => {
+            const split = x.split('=');
+            return {
+                paramName: split[0].slice(1),
+                matcherName: split[1],
+            };
+        })
+        .filter((x) => x.matcherName);
+
+    // get rid of matchers from url
+    for (const matcher of matchers) {
+        url = url.replace(`:${matcher.paramName}=${matcher.matcherName}`, `:${matcher.paramName}`);
+    }
+
     for (const m of ['.DELETE', '.POST', '.PATCH', '.GET', '.PUT']) {
         if (path.endsWith(m) || path.endsWith(m.toLowerCase())) {
             method = m.toLowerCase().slice(1);
@@ -62,5 +80,6 @@ export const buildRouteURL = (path: string) => {
     return {
         url,
         method,
+        matchers,
     };
 };
