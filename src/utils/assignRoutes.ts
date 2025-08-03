@@ -358,7 +358,7 @@ export const assignRoutes = async (oweb: Oweb, directory: string, matchersDirect
 
     routesCache = routes;
 
-    oweb.all('*', (req, res) => {
+    function fallbackHandle(req: FastifyRequest, res: FastifyReply) {
         const vals = temporaryRequests[req.method.toLowerCase()];
         const keys = Object.keys(vals);
 
@@ -376,7 +376,11 @@ export const assignRoutes = async (oweb: Oweb, directory: string, matchersDirect
         } else {
             return send404(req, res);
         }
-    });
+    }
+
+    for (const element of ['get', 'post', 'put', 'patch', 'delete']) {
+        oweb[element]('*', fallbackHandle);
+    }
 
     for (const route of routes) {
         assignSpecificRoute(oweb, route);
