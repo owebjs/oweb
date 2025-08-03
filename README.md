@@ -79,6 +79,43 @@ export default class extends Route {
 
 This will create a GET route at `/users/:id`.
 
+### Parameter Validation with Matchers
+
+Use matchers to validate dynamic route parameters:
+
+```javascript
+// routes/users/[id=integer].js
+import { Route } from 'owebjs';
+
+export default class extends Route {
+    async handle(req, res) {
+        res.send({ userId: req.params.id });
+    }
+}
+```
+
+```javascript
+// matchers/integer.js
+export default function (val) {
+    return !isNaN(val);
+}
+```
+
+Then configure Oweb to use your matchers directory:
+
+```javascript
+await app.loadRoutes({
+    directory: 'routes',
+    matchersDirectory: 'matchers', // Directory containing custom matchers
+    hmr: {
+        enabled: true,
+        matchersDirectory: 'matchers', // Optional: Enable HMR for matchers
+    },
+});
+```
+
+Now you can use your custom matchers in route filenames with the syntax `[paramName=matcherName]`.
+
 ### HTTP Methods
 
 Specify the HTTP method in the filename:
