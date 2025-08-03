@@ -16,7 +16,14 @@ app.setInternalErrorHandler((req, res, err) => {
     });
 });
 
-await app.loadRoutes({ directory: 'test/routes' });
+await app.loadRoutes({
+    directory: 'test/routes',
+    hmr: {
+        enabled: true,
+        directory: 'test/routes',
+    },
+});
+
 await app.start({ port: 3000 });
 
 console.log('listening');

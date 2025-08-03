@@ -2,10 +2,12 @@ import { readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { mergePaths } from './utils';
+import { Hook } from '../structures/Hook';
 
 export interface WalkResult {
     name: string;
     path: string;
+    hooks: (typeof Hook)[];
     rel: string;
     filePath: string;
 }

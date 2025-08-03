@@ -4,12 +4,112 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRoutePath, buildRouteURL } from './utils';
 import { walk, type WalkResult } from './walk';
-import { Oweb } from '../index';
+import { Oweb, Route } from '../index';
+import { HMROperations } from './watchRoutes';
+import { success, warn } from './logger';
+import { match } from 'path-to-regexp';
+import generateFunctionFromTypescript from './generateFunctionFromTypescript';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+let routeFunctions = {};
+
+const temporaryRequests: Record<string, Record<string, Function>> = {
+    get: {},
+    post: {},
+    put: {},
+    delete: {},
+    patch: {},
+    options: {},
+};
+
+let routesCache: GeneratedRoute[] = [];
+
+const compiledRoutes = {};
+
+// path is something like test\routes\testroute\[id].js
+export const applyHMR = async (
+    oweb: Oweb,
+    op: HMROperations,
+    workingDir: string,
+    path: string,
+    content: string,
+) => {
+    if (path.endsWith('hooks.js') || path.endsWith('hooks.ts')) {
+        warn(
+            `Hot Module Replacement is not supported for hooks. Restart the server for changes to take effect.`,
+            'HMR',
+        );
+
+        return;
+    }
+
+    if (path.endsWith('.ts')) {
+        const start = Date.now();
+        compiledRoutes[path] = content.length
+            ? await generateFunctionFromTypescript(content, path)
+            : undefined;
+        const end = Date.now() - start;
+
+        success(`File ${path} compiled in ${end}ms`, 'HMR');
+    }
+
+    if (op === 'new-file') {
+        const start = Date.now();
+        const files = await walk(workingDir);
+        const routes = await generateRoutes(files);
+
+        routesCache = routes;
+
+        const f = routes.find((x) => x.fileInfo.filePath == path);
+
+        temporaryRequests[f.method.toLowerCase()][f.url] = inner(oweb, f);
+        const end = Date.now() - start;
+
+        success(`Route ${f.method.toUpperCase()}:${f.url} created in ${end}ms`, 'HMR');
+    } else if (op === 'modify-file') {
+        const start = Date.now();
+        const files = await walk(workingDir);
+        const routes = await generateRoutes(files);
+
+        routesCache = routes;
+
+        const f = routes.find((x) => x.fileInfo.filePath == path);
+
+        if (f.url in temporaryRequests[f.method.toLowerCase()]) {
+            temporaryRequests[f.method.toLowerCase()][f.url] = inner(oweb, f);
+        } else {
+            routeFunctions[f.fileInfo.filePath] = inner(oweb, f);
+        }
+
+        const end = Date.now() - start;
+
+        success(`Route ${f.method.toUpperCase()}:${f.url} reloaded in ${end}ms`, 'HMR');
+    } else if (op === 'delete-file') {
+        const start = Date.now();
+        const f = routesCache.find((x) => x.fileInfo.filePath == path);
+
+        if (f.url in temporaryRequests[f.method.toLowerCase()]) {
+            delete temporaryRequests[f.method.toLowerCase()][f.url];
+        } else {
+            delete routeFunctions[f.fileInfo.filePath];
+        }
+
+        const end = Date.now() - start;
+
+        success(`Route ${f.method.toUpperCase()}:${f.url} removed in ${end}ms`, 'HMR');
+    }
+};
+
+type GeneratedRoute = {
+    url: string;
+    method: string;
+    fn: new (...args: any[]) => Route;
+    fileInfo: WalkResult;
+};
+
 export const generateRoutes = async (files: WalkResult[]) => {
-    const routes = [];
+    const routes: GeneratedRoute[] = [];
 
     for (const file of files) {
         const parsedFile = path.parse(file.rel);
@@ -22,7 +122,20 @@ export const generateRoutes = async (files: WalkResult[]) => {
 
         const routePath = buildRoutePath(parsedFile);
         const route = buildRouteURL(routePath);
-        const def = await import(packageURL);
+
+        if (compiledRoutes[file.filePath]) {
+            routes.push({
+                url: route.url,
+                method: route.method,
+                fn: compiledRoutes[file.filePath],
+                fileInfo: file,
+            });
+
+            continue;
+        }
+
+        const cacheBuster = `?t=${Date.now()}`;
+        const def = await import(packageURL + cacheBuster);
 
         const routeFuncs = def.default;
 
@@ -37,58 +150,114 @@ export const generateRoutes = async (files: WalkResult[]) => {
     return routes;
 };
 
+function inner(oweb: Oweb, route: GeneratedRoute) {
+    if (!route.fn) {
+        return;
+    }
+
+    const routeFunc = new route.fn();
+
+    return function (req: FastifyRequest, res: FastifyReply) {
+        const handle = () => {
+            if (routeFunc.handle.constructor.name == 'AsyncFunction') {
+                routeFunc.handle(req, res).catch((error) => {
+                    if (routeFunc?.handleError) {
+                        routeFunc.handleError(req, res, error);
+                    } else {
+                        oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, error);
+                    }
+                });
+            } else {
+                try {
+                    routeFunc.handle(req, res);
+                } catch (error) {
+                    if (routeFunc?.handleError) {
+                        routeFunc.handleError(req, res, error);
+                    } else {
+                        oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, error);
+                    }
+                }
+            }
+        };
+
+        //assign hooks if exists
+        if (route.fileInfo.hooks.length) {
+            for (let index = 0; index < route.fileInfo.hooks.length; index++) {
+                const hookFun = route.fileInfo.hooks[index];
+                hookFun.prototype.handle(req, res, () => {
+                    //callback
+                    if (index + 1 == route.fileInfo.hooks.length) {
+                        //means all of the hooks passed through
+
+                        handle();
+                    }
+                });
+            }
+        } else {
+            handle();
+        }
+    };
+}
+
+function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
+    if (!route.fn) return;
+
+    const routeFunc = new route.fn();
+
+    routeFunctions[route.fileInfo.filePath] = inner(oweb, route);
+
+    oweb[route.method](
+        route.url,
+        routeFunc._options || {},
+        function (req: FastifyRequest, res: FastifyReply) {
+            if (routeFunctions[route.fileInfo.filePath]) {
+                return routeFunctions[route.fileInfo.filePath](req, res);
+            } else {
+                return res.status(404).send({
+                    message: `Route ${req.method}:${req.url} not found`,
+                    error: 'Not Found',
+                    statusCode: 404,
+                });
+            }
+        },
+    );
+}
+
 export const assignRoutes = async (oweb: Oweb, directory: string) => {
     const files = await walk(directory);
     const routes = await generateRoutes(files);
 
+    routesCache = routes;
+
+    oweb.all('*', (req, res) => {
+        const vals = temporaryRequests[req.method.toLowerCase()];
+        const keys = Object.keys(vals);
+
+        if (!vals || !keys.length) {
+            return res.status(404).send({
+                message: `Route ${req.method}:${req.url} not found`,
+                error: 'Not Found',
+                statusCode: 404,
+            });
+        }
+
+        const f = keys.find((tempName) => {
+            const matcher = match(tempName);
+            return matcher(req.url);
+        });
+
+        if (f && vals[f]) {
+            return vals[f](req, res);
+        } else {
+            return res.status(404).send({
+                message: `Route ${req.method}:${req.url} not found`,
+                error: 'Not Found',
+                statusCode: 404,
+            });
+        }
+    });
+
     for (const route of routes) {
-        const routeFunc = new route.fn();
-
-        oweb[route.method](
-            route.url,
-            routeFunc._options || {},
-            function (req: FastifyRequest, res: FastifyReply) {
-                const handle = () => {
-                    if (routeFunc.handle.constructor.name == 'AsyncFunction') {
-                        routeFunc.handle(...arguments).catch((error) => {
-                            const handleErrorArgs = [...arguments, error];
-                            if (routeFunc?.handleError) {
-                                routeFunc.handleError(...handleErrorArgs);
-                            } else {
-                                oweb._options.OWEB_INTERNAL_ERROR_HANDLER(...handleErrorArgs);
-                            }
-                        });
-                    } else {
-                        try {
-                            routeFunc.handle(...arguments);
-                        } catch (error) {
-                            const handleErrorArgs = [...arguments, error];
-                            if (routeFunc?.handleError) {
-                                routeFunc.handleError(...handleErrorArgs);
-                            } else {
-                                oweb._options.OWEB_INTERNAL_ERROR_HANDLER(...handleErrorArgs);
-                            }
-                        }
-                    }
-                };
-
-                //assign hooks if exists
-                if (route.fileInfo.hooks.length) {
-                    for (let index = 0; index < route.fileInfo.hooks.length; index++) {
-                        const hookFun = route.fileInfo.hooks[index];
-                        new hookFun().handle(req, res, () => {
-                            //callback
-                            if (index + 1 == route.fileInfo.hooks.length) {
-                                //means all of the hooks passed through
-
-                                handle();
-                            }
-                        });
-                    }
-                } else {
-                    handle();
-                }
-            },
-        );
+        assignSpecificRoute(oweb, route);
     }
 };

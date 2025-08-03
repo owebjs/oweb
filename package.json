@@ -32,17 +32,32 @@
     "author": "owebjs",
     "license": "MIT",
     "dependencies": {
-        "fastify": "^4.23.2"
+        "@babel/core": "^7.28.0",
+        "@babel/generator": "^7.28.0",
+        "@babel/parser": "^7.28.0",
+        "@babel/preset-typescript": "^7.27.1",
+        "@babel/traverse": "^7.28.0",
+        "@babel/types": "^7.28.2",
+        "chalk": "^5.4.1",
+        "fastify": "4.23.2",
+        "path-to-regexp": "^8.2.0"
     },
     "devDependencies": {
         "@fastify/multipart": "^8.1.0",
         "@swc/core": "^1.3.85",
-        "@types/node": "^20.6.2",
+        "@types/chokidar": "^2.1.3",
+        "@types/node": "^24.1.0",
+        "chokidar": "^3.5.3",
         "prettier": "^3.0.3",
         "tslib": "^2.6.2",
-        "tsup": "^7.2.0",
+        "tsup": "^8.5.0",
         "typescript": "^5.2.2",
         "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.10.0"
     },
-    "type": "module"
+    "type": "module",
+    "pnpm": {
+        "onlyBuiltDependencies": [
+            "esbuild"
+        ]
+    }
 }
