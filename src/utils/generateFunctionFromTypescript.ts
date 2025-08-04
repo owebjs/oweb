@@ -7,6 +7,10 @@ import { pathToFileURL } from 'node:url';
 import { writeFile, unlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
+import { error } from './logger';
+
+const require = createRequire(import.meta.url);
 
 export default async function generateFunctionFromTypescript(tsCode: string, filePath: string) {
     const result = babel.transformSync(tsCode, {
@@ -34,10 +38,22 @@ export default async function generateFunctionFromTypescript(tsCode: string, fil
 
                 const originalFileDir = path.dirname(filePath);
                 const absoluteDepPath = path.resolve(originalFileDir, resolvedPath);
-
                 const absoluteDepUrl = pathToFileURL(absoluteDepPath).href;
 
                 importSourceNode.value = absoluteDepUrl;
+            } else {
+                try {
+                    const resolvedPath = require.resolve(relativePath, {
+                        paths: [path.dirname(filePath)],
+                    });
+                    const resolvedUrl = pathToFileURL(resolvedPath).href;
+                    importSourceNode.value = resolvedUrl;
+                } catch (_) {
+                    error(
+                        `Could not resolve module "${relativePath}". Please ensure it is installed.`,
+                        'HMR',
+                    );
+                }
             }
         },
     });
