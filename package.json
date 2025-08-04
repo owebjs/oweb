@@ -18,7 +18,7 @@
     },
     "scripts": {
         "start": "node .",
-        "build": "tsup",
+        "build": "tsup && node scripts/copyBinaries",
         "dev": "tsup && node .",
         "test": "tsup && node scripts/copyBinaries && node test/index.js",
         "format": "prettier --write . --ignore-path .gitignore"
