@@ -42,6 +42,7 @@ export const applyMatcherHMR = async (
     oweb: Oweb,
     op: HMROperations,
     workingDir: string,
+    fallbackDir: string,
     filePath: string,
     content: string,
 ) => {
@@ -87,6 +88,7 @@ export const applyRouteHMR = async (
     oweb: Oweb,
     op: HMROperations,
     workingDir: string,
+    fallbackDir: string,
     path: string,
     content: string,
 ) => {
@@ -111,7 +113,7 @@ export const applyRouteHMR = async (
 
     if (op === 'new-file') {
         const start = Date.now();
-        const files = await walk(workingDir);
+        const files = await walk(workingDir, [], fallbackDir);
         const routes = await generateRoutes(files);
 
         routesCache = routes;
@@ -125,7 +127,7 @@ export const applyRouteHMR = async (
         success(`Route ${f.method.toUpperCase()}:${f.url} created in ${end}ms`, 'HMR');
     } else if (op === 'modify-file') {
         const start = Date.now();
-        const files = await walk(workingDir);
+        const files = await walk(workingDir, [], fallbackDir);
         const routes = await generateRoutes(files);
 
         routesCache = routes;

@@ -28,7 +28,11 @@ const isParentOrGrandparent = (parentFolderPath: string, childFolderPath: string
 
 const hookPaths = new Set();
 
-export const walk = async (directory: string, tree = []): Promise<WalkResult[]> => {
+export const walk = async (
+    directory: string,
+    tree = [],
+    fallbackDir?: string,
+): Promise<WalkResult[]> => {
     const results = [];
 
     const readDirPriority = readdirSync(directory);
@@ -56,7 +60,7 @@ export const walk = async (directory: string, tree = []): Promise<WalkResult[]> 
         const fileStats = statSync(filePath);
 
         if (fileStats.isDirectory()) {
-            results.push(...(await walk(filePath, [...tree, fileName])));
+            results.push(...(await walk(filePath, [...tree, fileName], fallbackDir)));
         } else {
             const spread = [...hookPaths];
 
@@ -82,11 +86,28 @@ export const walk = async (directory: string, tree = []): Promise<WalkResult[]> 
                 useHook = hooks;
             }
 
-            const hooksImport = useHook.map(
-                (hookPath: string) =>
-                    new URL(hookPath, `file://${__dirname}`).pathname.replaceAll('\\', '/') +
-                    '/_hooks.js',
-            );
+            const hooksImport = useHook.map((hookPath: string) => {
+                if (fallbackDir) {
+                    const findLastPath = hookPath.replace(process.cwd(), '').split('\\').at(-1);
+
+                    const additionNeeded = !fallbackDir.endsWith(`/${findLastPath}`);
+
+                    return (
+                        new URL(
+                            path.join(
+                                process.cwd(),
+                                fallbackDir,
+                                additionNeeded ? `/${findLastPath}` : '',
+                            ),
+                        ).pathname.replaceAll('\\', '/') + '/_hooks.js'
+                    );
+                } else {
+                    return (
+                        new URL(hookPath, `file://${__dirname}`).pathname.replaceAll('\\', '/') +
+                        '/_hooks.js'
+                    );
+                }
+            });
 
             const hookFunctions = [];
 

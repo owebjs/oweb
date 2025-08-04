@@ -35,6 +35,9 @@ export class Oweb extends _FastifyInstance {
     public _options: OwebOptions = {};
     private hmrDirectory: string;
     private hmrMatchersDirectory: string;
+    private directory: string;
+    private matchersDirectory: string;
+
     public routes: Map<string, any> = new Map();
 
     public constructor(options?: OwebOptions) {
@@ -107,6 +110,9 @@ export class Oweb extends _FastifyInstance {
         if (hmr && !hmr.directory) hmr.directory = directory;
         if (hmr && !hmr.matchersDirectory) hmr.matchersDirectory = matchersDirectory;
 
+        this.directory = directory;
+        this.matchersDirectory = matchersDirectory;
+
         if (hmr?.enabled) {
             this.hmrDirectory = hmr.directory;
             this.hmrMatchersDirectory = hmr.matchersDirectory;
@@ -127,12 +133,19 @@ export class Oweb extends _FastifyInstance {
      */
     private watch() {
         watchDirectory(this.hmrDirectory, true, (op, path, content) => {
-            applyRouteHMR(this, op, this.hmrDirectory, path, content);
+            applyRouteHMR(this, op, this.hmrDirectory, this.directory, path, content);
         });
 
         if (this.hmrMatchersDirectory) {
             watchDirectory(this.hmrMatchersDirectory, true, (op, path, content) => {
-                applyMatcherHMR(this, op, this.hmrMatchersDirectory, path, content);
+                applyMatcherHMR(
+                    this,
+                    op,
+                    this.hmrMatchersDirectory,
+                    this.matchersDirectory,
+                    path,
+                    content,
+                );
             });
         }
     }
