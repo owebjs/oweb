@@ -108,9 +108,11 @@ export default async function generateFunctionFromTypescript<T = any>(
                     resolvedPathForDist = resolvedPathForDist.substring('src'.length + 1);
                 }
 
-                let jsPath = resolvedPathForDist.replace(/\.(ts|mts|cts)$/, '');
+                let jsPath = resolvedPathForDist.replace(/\.(ts|js|mts|cts)$/, '.js');
 
-                jsPath += '.js';
+                if (jsPath.startsWith('dist')) {
+                    jsPath = jsPath.slice('dist'.length + 1);
+                }
 
                 const targetDistPath = path.join(tsConfig.outDir, jsPath);
 

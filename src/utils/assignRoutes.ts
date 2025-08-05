@@ -152,8 +152,14 @@ export const applyRouteHMR = async (
         success(`Route ${f.method.toUpperCase()}:${f.url} reloaded in ${end}ms`, 'HMR');
     } else if (op === 'delete-file') {
         const start = Date.now();
-        const f = routesCache.find((x) => x.fileInfo.filePath == path);
+        const newFilePath = path.slice(workingDir.length).replaceAll('\\', '/').slice(0, -3);
+        let builded = buildRouteURL(newFilePath);
 
+        if (builded.url.endsWith('/index')) {
+            builded.url = builded.url.slice(0, -'/index'.length);
+        }
+
+        const f = routesCache.find((x) => x.method == builded.method && x.url == builded.url);
         if (f.url in temporaryRequests[f.method.toLowerCase()]) {
             delete temporaryRequests[f.method.toLowerCase()][f.url];
         } else {
@@ -161,7 +167,6 @@ export const applyRouteHMR = async (
         }
 
         const end = Date.now() - start;
-
         success(`Route ${f.method.toUpperCase()}:${f.url} removed in ${end}ms`, 'HMR');
     }
 };
