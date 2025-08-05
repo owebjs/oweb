@@ -15,7 +15,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let matcherOverrides = {};
 
-let routeFunctions = {};
+let routeFunctions: Record<string, Record<string, Function>> = {
+    get: {},
+    post: {},
+    put: {},
+    delete: {},
+    patch: {},
+    options: {},
+};
 
 const temporaryRequests: Record<string, Record<string, Function>> = {
     get: {},
@@ -114,7 +121,7 @@ export const applyRouteHMR = async (
     if (op === 'new-file') {
         const start = Date.now();
         const files = await walk(workingDir, [], fallbackDir);
-        const routes = await generateRoutes(files);
+        const routes = await generateRoutes(files, path);
 
         routesCache = routes;
 
@@ -128,7 +135,7 @@ export const applyRouteHMR = async (
     } else if (op === 'modify-file') {
         const start = Date.now();
         const files = await walk(workingDir, [], fallbackDir);
-        const routes = await generateRoutes(files);
+        const routes = await generateRoutes(files, path);
 
         routesCache = routes;
 
@@ -137,7 +144,7 @@ export const applyRouteHMR = async (
         if (f.url in temporaryRequests[f.method.toLowerCase()]) {
             temporaryRequests[f.method.toLowerCase()][f.url] = inner(oweb, f);
         } else {
-            routeFunctions[f.fileInfo.filePath] = inner(oweb, f);
+            routeFunctions[f.method.toLowerCase()][f.url] = inner(oweb, f);
         }
 
         const end = Date.now() - start;
@@ -150,7 +157,7 @@ export const applyRouteHMR = async (
         if (f.url in temporaryRequests[f.method.toLowerCase()]) {
             delete temporaryRequests[f.method.toLowerCase()][f.url];
         } else {
-            delete routeFunctions[f.fileInfo.filePath];
+            delete routeFunctions[f.method.toLowerCase()][f.url];
         }
 
         const end = Date.now() - start;
@@ -170,7 +177,7 @@ type GeneratedRoute = {
     fileInfo: WalkResult;
 };
 
-export const generateRoutes = async (files: WalkResult[]) => {
+export const generateRoutes = async (files: WalkResult[], onlyGenerateFn?: string) => {
     const routes: GeneratedRoute[] = [];
 
     for (const file of files) {
@@ -197,10 +204,13 @@ export const generateRoutes = async (files: WalkResult[]) => {
             continue;
         }
 
-        const cacheBuster = `?t=${Date.now()}`;
-        const def = await import(packageURL + cacheBuster);
+        let routeFuncs: new (...args: any[]) => Route;
 
-        const routeFuncs = def.default;
+        if (!(onlyGenerateFn && file.filePath !== onlyGenerateFn)) {
+            const cacheBuster = `?t=${Date.now()}`;
+            const def = await import(packageURL + cacheBuster);
+            routeFuncs = def.default;
+        }
 
         routes.push({
             url: route.url,
@@ -299,17 +309,17 @@ function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
 
     const routeFunc = new route.fn();
 
-    routeFunctions[route.fileInfo.filePath] = inner(oweb, route);
+    routeFunctions[route.method][route.url] = inner(oweb, route);
 
     oweb[route.method](
         route.url,
         routeFunc._options || {},
         function (req: FastifyRequest, res: FastifyReply) {
-            if (routeFunctions[route.fileInfo.filePath]) {
-                return routeFunctions[route.fileInfo.filePath](req, res);
+            if (routeFunctions[route.method][route.url]) {
+                return routeFunctions[route.method][route.url](req, res);
             } else {
                 // if file was present but later renamed at HMR, this will be useful
-                const vals = temporaryRequests[req.method.toLowerCase()];
+                const vals = temporaryRequests[route.method];
                 const keys = Object.keys(vals);
 
                 if (!vals || !keys.length) {
