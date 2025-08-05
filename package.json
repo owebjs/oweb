@@ -1,6 +1,6 @@
 {
     "name": "owebjs",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "description": "A flexible and modern web framework built on top of Fastify",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",

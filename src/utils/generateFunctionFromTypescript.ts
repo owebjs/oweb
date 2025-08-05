@@ -110,6 +110,11 @@ export default async function generateFunctionFromTypescript<T = any>(
 
                 let jsPath = resolvedPathForDist.replace(/\.(ts|js|mts|cts)$/, '.js');
 
+                // in ts, we can import ts files without the extension. For compatibility, we need to add .js at the end
+                if (!jsPath.endsWith('.js')) {
+                    jsPath = jsPath + '.js';
+                }
+
                 if (jsPath.startsWith('dist')) {
                     jsPath = jsPath.slice('dist'.length + 1);
                 }
