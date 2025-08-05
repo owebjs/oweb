@@ -16,6 +16,7 @@ export function watchDirectory(
             stabilityThreshold: 150,
             pollInterval: 50,
         },
+        usePolling: true,
     });
 
     watcher.on('add', async (filePath) => {
