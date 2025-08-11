@@ -62,6 +62,8 @@ export const walk = async (
         if (fileStats.isDirectory()) {
             results.push(...(await walk(filePath, [...tree, fileName], fallbackDir)));
         } else {
+            if (!['.js', '.ts'].includes(path.extname(fileName))) continue;
+
             const spread = [...hookPaths];
 
             const hooks = spread.filter((hookPath: string) => {

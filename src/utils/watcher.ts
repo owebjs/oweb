@@ -1,5 +1,6 @@
 import chokidar from 'chokidar';
-import { readFileSync } from 'fs';
+import { readFileSync } from 'node:fs';
+import { extname } from 'node:path';
 
 export type HMROperations = 'new-file' | 'delete-file' | 'modify-file';
 
@@ -19,17 +20,25 @@ export function watchDirectory(
         usePolling: true,
     });
 
+    const supportedExtensions = ['.js', '.ts'];
+
     watcher.on('add', async (filePath) => {
+        if (!supportedExtensions.includes(extname(filePath))) return;
+
         const content = readFileSync(filePath, 'utf-8');
         onUpdate('new-file', filePath, content);
     });
 
     watcher.on('change', async (filePath) => {
+        if (!supportedExtensions.includes(extname(filePath))) return;
+
         const content = readFileSync(filePath, 'utf-8');
         onUpdate('modify-file', filePath, content);
     });
 
     watcher.on('unlink', (filePath) => {
+        if (!supportedExtensions.includes(extname(filePath))) return;
+
         onUpdate('delete-file', filePath, '');
     });
 }

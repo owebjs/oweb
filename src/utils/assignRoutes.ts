@@ -1,6 +1,5 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import path from 'node:path';
-import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildRoutePath, buildRouteURL } from './utils';
 import { walk, type WalkResult } from './walk';
@@ -11,7 +10,7 @@ import { match } from 'path-to-regexp';
 import generateFunctionFromTypescript from './generateFunctionFromTypescript';
 import { readdirSync } from 'node:fs';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let matcherOverrides = {};
 
@@ -347,7 +346,9 @@ function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
 }
 
 async function loadMatchers(directoryPath: string) {
-    const files = readdirSync(directoryPath);
+    const files = readdirSync(directoryPath).filter((f) =>
+        ['.js', '.ts'].includes(path.extname(f)),
+    );
 
     for (const file of files) {
         const filePath = path.join(directoryPath, file).replaceAll('\\', '/');
