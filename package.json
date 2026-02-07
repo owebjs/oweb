@@ -1,6 +1,6 @@
 {
     "name": "owebjs",
-    "version": "1.4.3",
+    "version": "1.4.4",
     "description": "A flexible and modern web framework built on top of Fastify",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
@@ -63,8 +63,5 @@
         "onlyBuiltDependencies": [
             "esbuild"
         ]
-    },
-    "peerDependencies": {
-        "uWebSockets.js": "*"
     }
 }
