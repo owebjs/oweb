@@ -1,26 +1,29 @@
 {
     "name": "owebjs",
-    "version": "1.4.2",
+    "version": "1.4.3",
     "description": "A flexible and modern web framework built on top of Fastify",
     "main": "dist/index.js",
     "types": "dist/index.d.ts",
+    "publishConfig": {
+        "access": "public"
+    },
     "exports": {
         ".": {
+            "types": "./dist/index.d.ts",
             "import": "./dist/index.js",
-            "default": "./dist/index.js",
-            "types": "./dist/index.d.ts"
+            "default": "./dist/index.js"
         },
         "./dist/plugins": {
+            "types": "./dist/plugins/index.d.ts",
             "import": "./dist/plugins/index.js",
-            "default": "./dist/plugins/index.js",
-            "types": "./dist/plugins/index.d.ts"
+            "default": "./dist/plugins/index.js"
         }
     },
     "scripts": {
         "start": "node .",
-        "build": "tsup && node scripts/copyBinaries",
+        "build": "tsup",
         "dev": "tsup && node .",
-        "test": "tsup && node scripts/copyBinaries && node test/index.js",
+        "test": "tsup && node test/index.js",
         "format": "prettier --write . --ignore-path .gitignore"
     },
     "homepage": "https://github.com/owebjs/oweb",
@@ -38,9 +41,11 @@
         "@babel/preset-typescript": "^7.27.1",
         "@babel/traverse": "^7.28.0",
         "@babel/types": "^7.28.2",
+        "@fastify/websocket": "^11.2.0",
         "chalk": "^5.4.1",
         "fastify": "4.23.2",
-        "path-to-regexp": "^8.2.0"
+        "path-to-regexp": "^8.2.0",
+        "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.49.0"
     },
     "devDependencies": {
         "@fastify/multipart": "^8.1.0",
@@ -51,13 +56,15 @@
         "prettier": "^3.0.3",
         "tslib": "^2.6.2",
         "tsup": "^8.5.0",
-        "typescript": "^5.2.2",
-        "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.10.0"
+        "typescript": "^5.2.2"
     },
     "type": "module",
     "pnpm": {
         "onlyBuiltDependencies": [
             "esbuild"
         ]
+    },
+    "peerDependencies": {
+        "uWebSockets.js": "*"
     }
 }
