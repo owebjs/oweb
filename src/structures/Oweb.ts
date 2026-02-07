@@ -61,7 +61,7 @@ export class Oweb extends _FastifyInstance {
      */
     public async setup(): Promise<Oweb> {
         if (this._options.uWebSocketsEnabled) {
-            const serverimp = (await import('../uwebsocket/server')).default;
+            const serverimp = (await import('../uwebsocket/server.js')).default;
             const server = await serverimp({});
 
             this._options.serverFactory = (handler) => {
