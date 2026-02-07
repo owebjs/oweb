@@ -57,9 +57,33 @@ export default class HttpResponse extends Writable {
         delete this.__headers[toLowerCase(name)];
     }
 
+    _flushHeaders() {
+        if (this.headersSent) return;
+
+        this.res.writeStatus(`${this.statusCode} ${this.statusMessage}`);
+
+        const keys = Object.keys(this.__headers);
+        for (let i = 0; i < keys.length; i++) {
+            const key = keys[i];
+            const value = this.__headers[key];
+
+            if (Array.isArray(value)) {
+                for (let j = 0; j < value.length; j++) {
+                    this.res.writeHeader(key, String(value[j]));
+                }
+            } else {
+                this.res.writeHeader(key, String(value));
+            }
+        }
+
+        this.headersSent = true;
+    }
+
     //@ts-ignore
     write(data) {
         if (this.finished) return;
+
+        this._flushHeaders();
 
         this.res.write(data);
     }
@@ -86,20 +110,21 @@ export default class HttpResponse extends Writable {
     end(data) {
         if (this.finished) return;
 
-        function doWrite(res) {
-            res.res.writeStatus(`${res.statusCode} ${res.statusMessage}`);
+        const self = this;
 
-            res.finished = true;
+        function doWrite() {
+            self._flushHeaders();
 
-            res.res.end(data);
+            self.finished = true;
+
+            self.res.end(data);
         }
 
         if (!data) {
             data = '';
-            return doWrite(this);
         }
 
-        return doWrite(this);
+        return doWrite();
     }
 
     getRaw() {
