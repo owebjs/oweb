@@ -65,6 +65,12 @@ export default class HttpResponse extends Writable {
         const keys = Object.keys(this.__headers);
         for (let i = 0; i < keys.length; i++) {
             const key = keys[i];
+
+            // https://github.com/uNetworking/uWebSockets.js/issues/1169
+            if (key === 'content-length' || key === 'transfer-encoding') {
+                continue;
+            }
+
             const value = this.__headers[key];
 
             if (Array.isArray(value)) {
