@@ -65,6 +65,8 @@ export default async function ({
     });
 
     class uServerClass extends EventEmitter {
+        public _socket: any;
+
         constructor() {
             super();
 
@@ -94,7 +96,6 @@ export default async function ({
             let args;
             const callbackFunction = function (socket) {
                 uServer._socket = socket;
-
                 if (cb) cb(socket);
             };
             if (host && port && cb) {
@@ -116,7 +117,6 @@ export default async function ({
                 host = listenOptions.host;
                 return this.start(host, port, (socket) => {
                     uServer._socket = socket;
-
                     if (cb) cb(socket);
                 });
             } else {
@@ -129,6 +129,130 @@ export default async function ({
                     return this.start(host, port, cb);
                 }
             }
+        }
+
+        ws(pattern, behaviors, hooks = []) {
+            uServer.ws(pattern, {
+                compression: behaviors.compression,
+                maxPayloadLength: behaviors.maxPayloadLength,
+                idleTimeout: behaviors.idleTimeout,
+                sendPingsAutomatically: behaviors.sendPingsAutomatically,
+
+                upgrade: async (res, req, context) => {
+                    const url = req.getUrl();
+                    const query = req.getQuery();
+                    const method = req.getMethod().toUpperCase();
+                    const headers = {};
+
+                    req.forEach((key, value) => {
+                        headers[key] = value;
+                    });
+
+                    const secKey = headers['sec-websocket-key'];
+                    const secProtocol = headers['sec-websocket-protocol'];
+                    const secExtensions = headers['sec-websocket-extensions'];
+
+                    let aborted = false;
+                    res.onAborted(() => {
+                        aborted = true;
+                    });
+
+                    const reqWrapper = {
+                        url: url + (query ? '?' + query : ''),
+                        routerPath: pattern,
+                        query: new URLSearchParams(query),
+                        headers: headers,
+                        method: method,
+                        params: {}, // TODO: implement params
+                        raw: { url, method, headers },
+                    };
+
+                    const resWrapper = {
+                        statusCode: 200,
+                        _headers: {},
+                        finished: false,
+
+                        header(key, value) {
+                            this._headers[key.toLowerCase()] = value;
+                            return this;
+                        },
+                        status(code) {
+                            this.statusCode = code;
+                            return this;
+                        },
+                        send(payload) {
+                            if (aborted || this.finished) return;
+                            this.finished = true;
+
+                            res.writeStatus(`${this.statusCode} Response`);
+                            for (const [k, v] of Object.entries(this._headers)) {
+                                res.writeHeader(k, String(v));
+                            }
+                            res.end(
+                                typeof payload === 'object'
+                                    ? JSON.stringify(payload)
+                                    : String(payload),
+                            );
+                            return this;
+                        },
+                    };
+
+                    try {
+                        for (const HookClass of hooks) {
+                            if (aborted || resWrapper.finished) return;
+
+                            await new Promise((resolve, reject) => {
+                                try {
+                                    const hookInstance =
+                                        typeof HookClass === 'function'
+                                            ? new HookClass()
+                                            : HookClass;
+
+                                    hookInstance.handle(reqWrapper, resWrapper, (err) => {
+                                        if (err) reject(err);
+                                        else resolve(true);
+                                    });
+                                } catch (err) {
+                                    reject(err);
+                                }
+                            });
+                        }
+                    } catch (err) {
+                        if (!aborted && !resWrapper.finished) {
+                            console.error('WebSocket Hook Error:', err);
+                            res.writeStatus('500 Internal Server Error');
+                            res.end(
+                                JSON.stringify({
+                                    error: 'Internal Server Error',
+                                    message: err.message,
+                                }),
+                            );
+                        }
+                        return;
+                    }
+
+                    if (aborted || resWrapper.finished) return;
+
+                    const reqData = {
+                        ...reqWrapper,
+                        query: query,
+                    };
+
+                    res.upgrade({ req: reqData }, secKey, secProtocol, secExtensions, context);
+                },
+
+                open: (ws) => {
+                    if (behaviors.open) {
+                        const data = ws.getUserData();
+                        behaviors.open(ws, data.req);
+                    }
+                },
+                message: behaviors.message,
+                drain: behaviors.drain,
+                close: behaviors.close,
+                ping: behaviors.ping,
+                pong: behaviors.pong,
+            });
         }
 
         get uwsApp() {

@@ -10,6 +10,11 @@ import { match } from 'path-to-regexp';
 import generateFunctionFromTypescript from './generateFunctionFromTypescript';
 import { readdirSync } from 'node:fs';
 
+import { WebSocketRoute, WebSocketAdapter } from '../structures/WebSocketRoute';
+
+const websocketRoutes: Record<string, WebSocketRoute> = {};
+const registeredWebSockets = new Set<string>();
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let matcherOverrides = {};
@@ -42,6 +47,42 @@ function removeExtension(filePath: string) {
         return filePath.substring(0, lastDotIndex);
     }
     return filePath;
+}
+
+function createWebSocketProxy(url: string) {
+    const getHandler = () => websocketRoutes[url];
+
+    return {
+        compression: getHandler()?._options.compression,
+        maxPayloadLength: getHandler()?._options.maxPayloadLength,
+        idleTimeout: getHandler()?._options.idleTimeout,
+        sendPingsAutomatically: getHandler()?._options.sendPingsAutomatically,
+
+        open: (ws: WebSocketAdapter, req: any) => {
+            const handler = getHandler();
+            if (handler?.open) handler.open(ws, req);
+        },
+        message: (ws: WebSocketAdapter, message: ArrayBuffer, isBinary: boolean) => {
+            const handler = getHandler();
+            if (handler?.message) handler.message(ws, message, isBinary);
+        },
+        drain: (ws: WebSocketAdapter) => {
+            const handler = getHandler();
+            if (handler?.drain) handler.drain(ws);
+        },
+        close: (ws: WebSocketAdapter, code: number, message: ArrayBuffer) => {
+            const handler = getHandler();
+            if (handler?.close) handler.close(ws, code, message);
+        },
+        ping: (ws: WebSocketAdapter, message: ArrayBuffer) => {
+            const handler = getHandler();
+            if (handler?.ping) handler.ping(ws, message);
+        },
+        pong: (ws: WebSocketAdapter, message: ArrayBuffer) => {
+            const handler = getHandler();
+            if (handler?.pong) handler.pong(ws, message);
+        },
+    };
 }
 
 export const applyMatcherHMR = async (
@@ -103,7 +144,6 @@ export const applyRouteHMR = async (
             `Hot Module Replacement is not supported for hooks. Restart the server for changes to take effect.`,
             'HMR',
         );
-
         return;
     }
 
@@ -113,7 +153,6 @@ export const applyRouteHMR = async (
             ? await generateFunctionFromTypescript(content, path)
             : undefined;
         const end = Date.now() - start;
-
         success(`File ${path} compiled in ${end}ms`, 'HMR');
     }
 
@@ -121,33 +160,42 @@ export const applyRouteHMR = async (
         const start = Date.now();
         const files = await walk(workingDir, [], fallbackDir);
         const routes = await generateRoutes(files, path);
-
         routesCache = routes;
 
         const f = routes.find((x) => x.fileInfo.filePath == path);
 
+        if (f.fn.prototype instanceof WebSocketRoute) {
+            assignSpecificRoute(oweb, f);
+            const end = Date.now() - start;
+            success(`WebSocket Route ${f.url} created in ${end}ms`, 'HMR');
+            return;
+        }
+
         temporaryRequests[f.method.toLowerCase()][f.url] = inner(oweb, f);
-
         const end = Date.now() - start;
-
         success(`Route ${f.method.toUpperCase()}:${f.url} created in ${end}ms`, 'HMR');
     } else if (op === 'modify-file') {
         const start = Date.now();
         const files = await walk(workingDir, [], fallbackDir);
         const routes = await generateRoutes(files, path);
-
         routesCache = routes;
 
         const f = routes.find((x) => x.fileInfo.filePath == path);
+
+        if (f.fn.prototype instanceof WebSocketRoute) {
+            websocketRoutes[f.url] = new f.fn() as WebSocketRoute;
+
+            const end = Date.now() - start;
+            success(`WebSocket Route ${f.url} reloaded in ${end}ms`, 'HMR');
+            return;
+        }
 
         if (f.url in temporaryRequests[f.method.toLowerCase()]) {
             temporaryRequests[f.method.toLowerCase()][f.url] = inner(oweb, f);
         } else {
             routeFunctions[f.method.toLowerCase()][f.url] = inner(oweb, f);
         }
-
         const end = Date.now() - start;
-
         success(`Route ${f.method.toUpperCase()}:${f.url} reloaded in ${end}ms`, 'HMR');
     } else if (op === 'delete-file') {
         const start = Date.now();
@@ -158,15 +206,23 @@ export const applyRouteHMR = async (
             builded.url = builded.url.slice(0, -'/index'.length);
         }
 
-        const f = routesCache.find((x) => x.method == builded.method && x.url == builded.url);
-        if (f.url in temporaryRequests[f.method.toLowerCase()]) {
-            delete temporaryRequests[f.method.toLowerCase()][f.url];
-        } else {
-            delete routeFunctions[f.method.toLowerCase()][f.url];
+        if (websocketRoutes[builded.url]) {
+            delete websocketRoutes[builded.url];
+            const end = Date.now() - start;
+            success(`WebSocket Route ${builded.url} removed (shimmed) in ${end}ms`, 'HMR');
+            return;
         }
 
-        const end = Date.now() - start;
-        success(`Route ${f.method.toUpperCase()}:${f.url} removed in ${end}ms`, 'HMR');
+        const f = routesCache.find((x) => x.method == builded.method && x.url == builded.url);
+        if (f) {
+            if (f.url in temporaryRequests[f.method.toLowerCase()]) {
+                delete temporaryRequests[f.method.toLowerCase()][f.url];
+            } else {
+                delete routeFunctions[f.method.toLowerCase()][f.url];
+            }
+            const end = Date.now() - start;
+            success(`Route ${f.method.toUpperCase()}:${f.url} removed in ${end}ms`, 'HMR');
+        }
     }
 };
 
@@ -310,6 +366,21 @@ function send404(req: FastifyRequest, res: FastifyReply) {
 
 function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
     if (!route.fn) return;
+
+    if (route.fn.prototype instanceof WebSocketRoute) {
+        const wsInstance = new route.fn() as WebSocketRoute;
+
+        websocketRoutes[route.url] = wsInstance;
+
+        if (!registeredWebSockets.has(route.url)) {
+            const proxy = createWebSocketProxy(route.url);
+
+            oweb.ws(route.url, proxy, route.fileInfo.hooks);
+
+            registeredWebSockets.add(route.url);
+        }
+        return;
+    }
 
     const routeFunc = new route.fn();
 

@@ -38,6 +38,8 @@ export class Oweb extends _FastifyInstance {
     private directory: string;
     private matchersDirectory: string;
 
+    public uServer: any = null;
+
     public routes: Map<string, any> = new Map();
 
     public constructor(options?: OwebOptions) {
@@ -64,6 +66,8 @@ export class Oweb extends _FastifyInstance {
             const serverimp = (await import('../uwebsocket/server.js')).default;
             const server = await serverimp({});
 
+            this.uServer = server;
+
             this._options.serverFactory = (handler) => {
                 server.on('request', handler);
                 return server as unknown as RawServerDefault;
@@ -87,6 +91,13 @@ export class Oweb extends _FastifyInstance {
             );
         }
 
+        Object.defineProperty(fastify, 'uServer', {
+            value: this.uServer,
+            writable: true,
+            enumerable: true,
+            configurable: true,
+        });
+
         Object.defineProperty(fastify, '_options', {
             value: this._options,
             writable: true,
@@ -95,6 +106,14 @@ export class Oweb extends _FastifyInstance {
         });
 
         return fastify as unknown as Oweb;
+    }
+
+    public ws(url: string, behavior: any, hooks: any[] = []) {
+        if (this.uServer) {
+            this.uServer.ws(url, behavior, hooks);
+        } else {
+            // will add fastify support
+        }
     }
 
     /**

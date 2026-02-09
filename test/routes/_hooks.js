@@ -7,6 +7,11 @@ export default class extends Hook {
      */
     handle(req, res, done) {
         console.log('Hello from routes > _hooks.js');
+
+        req.locals = {};
+
+        req.locals['test'] = true;
+
         done();
     }
 }

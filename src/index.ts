@@ -6,6 +6,7 @@ export default Oweb;
 export * from './structures/Oweb';
 export * from './structures/Route';
 export * from './structures/Hook';
+export * from './structures/WebSocketRoute';
 
 // export types
 export * from './types';
