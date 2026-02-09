@@ -7,7 +7,7 @@ export default class TestSocket extends WebSocketRoute {
     }
 
     message(ws, message, isBinary) {
-        console.log('hmr test');
+        console.log('hmr tes t 2');
         ws.publish('room', message, isBinary);
     }
 

@@ -10,6 +10,8 @@ import { applyMatcherHMR, applyRouteHMR, assignRoutes } from '../utils/assignRou
 import { watchDirectory } from '../utils/watcher';
 import { info, success, warn } from '../utils/logger';
 
+import websocketPlugin from '@fastify/websocket';
+
 export interface OwebOptions extends FastifyServerOptions {
     uWebSocketsEnabled?: boolean;
     OWEB_INTERNAL_ERROR_HANDLER?: Function;
@@ -72,9 +74,15 @@ export class Oweb extends _FastifyInstance {
                 server.on('request', handler);
                 return server as unknown as RawServerDefault;
             };
+        } else {
+            this.uServer = null;
         }
 
         const fastify = Fastify(this._options);
+
+        if (!this._options.uWebSocketsEnabled) {
+            await fastify.register(websocketPlugin);
+        }
 
         fastify.addHook('onRequest', (_, res, done) => {
             res.header('X-Powered-By', 'Oweb');
@@ -94,8 +102,8 @@ export class Oweb extends _FastifyInstance {
         Object.defineProperty(fastify, 'uServer', {
             value: this.uServer,
             writable: true,
-            enumerable: true,
-            configurable: true,
+            enumerable: false,
+            configurable: false,
         });
 
         Object.defineProperty(fastify, '_options', {
@@ -112,7 +120,9 @@ export class Oweb extends _FastifyInstance {
         if (this.uServer) {
             this.uServer.ws(url, behavior, hooks);
         } else {
-            // will add fastify support
+            warn(
+                'Oweb#ws is only available when uWebSockets is enabled. For Fastify instances, Oweb automatically handles registrations.',
+            );
         }
     }
 

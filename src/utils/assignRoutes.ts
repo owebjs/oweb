@@ -5,12 +5,13 @@ import { buildRoutePath, buildRouteURL } from './utils';
 import { walk, type WalkResult } from './walk';
 import { Oweb, Route } from '../index';
 import { HMROperations } from './watcher';
-import { success, warn } from './logger';
+import { error, success, warn } from './logger';
 import { match } from 'path-to-regexp';
 import generateFunctionFromTypescript from './generateFunctionFromTypescript';
 import { readdirSync } from 'node:fs';
 
 import { WebSocketRoute, WebSocketAdapter } from '../structures/WebSocketRoute';
+import { FastifyWebSocketAdapter } from '../structures/FastifyWebSocketAdapter';
 
 const websocketRoutes: Record<string, WebSocketRoute> = {};
 const registeredWebSockets = new Set<string>();
@@ -369,15 +370,128 @@ function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
 
     if (route.fn.prototype instanceof WebSocketRoute) {
         const wsInstance = new route.fn() as WebSocketRoute;
-
         websocketRoutes[route.url] = wsInstance;
 
         if (!registeredWebSockets.has(route.url)) {
-            const proxy = createWebSocketProxy(route.url);
-
-            oweb.ws(route.url, proxy, route.fileInfo.hooks);
-
             registeredWebSockets.add(route.url);
+
+            if (oweb._options.uWebSocketsEnabled && oweb.uServer) {
+                const proxy = createWebSocketProxy(route.url);
+                oweb.ws(route.url, proxy, route.fileInfo.hooks);
+            } else {
+                oweb.get(route.url, { websocket: true }, (arg1: any, arg2: any) => {
+                    (async () => {
+                        let socket: any;
+                        let req: any;
+
+                        if (arg1 && arg1.socket) {
+                            // @fastify/websocket behavior
+                            socket = arg1.socket;
+                            req = arg2;
+                        } else if (arg1 && arg1.raw && arg1.raw.socket) {
+                            // route treated as http or raw request passed
+                            // we try to grab the underlying socket though this usually implies handshake failed
+                            socket = arg1.raw.socket;
+                            req = arg1;
+                        } else {
+                            // maybe arg1 is the socket?
+                            socket = arg1;
+                            req = arg2 || {};
+                        }
+
+                        // Validation
+                        if (!socket || typeof socket.on !== 'function') {
+                            error(
+                                `Could not find underlying socket for route ${route.url}. Arg1 type: ${typeof arg1}`,
+                                'WS',
+                            );
+
+                            return;
+                        }
+
+                        const adapter = new FastifyWebSocketAdapter(socket, req.raw || req);
+
+                        socket.on('error', (err: Error) => {
+                            error(`${route.url}: ${err.message}`, 'WS');
+                        });
+
+                        const hooks = route.fileInfo.hooks || [];
+                        try {
+                            for (const HookClass of hooks) {
+                                await new Promise<void>((resolve, reject) => {
+                                    const hookInstance =
+                                        typeof HookClass === 'function'
+                                            ? new (HookClass as any)()
+                                            : HookClass;
+
+                                    hookInstance.handle(
+                                        req,
+                                        {
+                                            status: (c) => ({
+                                                send: (m) => {
+                                                    socket.close(c, m);
+                                                    reject('closed');
+                                                },
+                                            }),
+                                            header: () => {},
+                                            send: (m) => {
+                                                socket.close(1000, m);
+                                                reject('closed');
+                                            },
+                                        },
+                                        (err) => {
+                                            if (err) reject(err);
+                                            else resolve();
+                                        },
+                                    );
+                                });
+                            }
+                        } catch (e) {
+                            if (e !== 'closed') {
+                                error(`WebSocket Hook Error: ${e}`, 'WS');
+                                socket.close(1011);
+                            }
+                            return;
+                        }
+
+                        const getHandler = () => websocketRoutes[route.url];
+
+                        socket.on('message', (message: any, isBinary: boolean) => {
+                            const h = getHandler();
+                            if (h?.message) h.message(adapter, message, isBinary);
+                        });
+
+                        socket.on('close', (code: number, reason: Buffer) => {
+                            const h = getHandler();
+                            adapter.cleanup();
+                            if (h?.close) h.close(adapter, code, reason);
+                        });
+
+                        socket.on('ping', (data: any) => {
+                            const h = getHandler();
+                            if (h?.ping) h.ping(adapter, data);
+                        });
+
+                        socket.on('pong', (data: any) => {
+                            const h = getHandler();
+                            if (h?.pong) h.pong(adapter, data);
+                        });
+
+                        const handler = getHandler();
+                        if (handler?.open) {
+                            await handler.open(adapter, req);
+                        }
+                    })().catch((err) => {
+                        error(`Internaal Error on ${route.url}: ${err.message}`, 'WS');
+
+                        if (arg1 && arg1.socket) {
+                            try {
+                                arg1.socket.close(1011);
+                            } catch {}
+                        }
+                    });
+                });
+            }
         }
         return;
     }

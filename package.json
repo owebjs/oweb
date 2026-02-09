@@ -41,11 +41,12 @@
         "@babel/preset-typescript": "^7.27.1",
         "@babel/traverse": "^7.28.0",
         "@babel/types": "^7.28.2",
-        "@fastify/websocket": "^11.2.0",
+        "@fastify/websocket": "^10.0.1",
         "chalk": "^5.4.1",
         "fastify": "4.23.2",
         "path-to-regexp": "^8.2.0",
-        "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0"
+        "uWebSockets.js": "github:uNetworking/uWebSockets.js#v20.52.0",
+        "ws": "^8.19.0"
     },
     "devDependencies": {
         "@fastify/cors": "^9.0.1",
