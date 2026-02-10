@@ -24,6 +24,17 @@ export const convertParamSyntax = (path: string) => {
 
 export const convertCatchallSyntax = (url: string) => url.replace(/:\.\.\.\w+/g, '*');
 
+export const formatSSE = (chunk: any) => {
+    if (typeof chunk === 'object') {
+        try {
+            chunk = JSON.stringify(chunk);
+        } catch (e) {
+            chunk = String(chunk);
+        }
+    }
+    return `data: ${chunk}\n\n`;
+};
+
 export const buildRoutePath = (parsedFile: ParsedPath) => {
     const directory = parsedFile.dir === parsedFile.root ? '' : parsedFile.dir;
     const name = parsedFile.name.startsWith('index')

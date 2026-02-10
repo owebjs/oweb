@@ -13,6 +13,8 @@ import { readdirSync } from 'node:fs';
 import { WebSocketRoute, WebSocketAdapter } from '../structures/WebSocketRoute';
 import { FastifyWebSocketAdapter } from '../structures/FastifyWebSocketAdapter';
 
+import { formatSSE } from './utils';
+
 const websocketRoutes: Record<string, WebSocketRoute> = {};
 const registeredWebSockets = new Set<string>();
 
@@ -297,36 +299,116 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
         const checkMatchers = () => {
             for (const matcher of matchers) {
                 const param = req.params[matcher.paramName];
-
                 const fun = matcherOverrides[matcher.matcherName];
-
                 if (fun) {
                     return fun(param);
                 }
             }
-
             return true;
         };
 
-        const handle = () => {
-            if (routeFunc.handle.constructor.name == 'AsyncFunction') {
-                routeFunc.handle(req, res).catch((error) => {
-                    if (routeFunc?.handleError) {
-                        routeFunc.handleError(req, res, error);
-                    } else {
-                        oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, error);
-                    }
-                });
-            } else {
-                try {
-                    routeFunc.handle(req, res);
-                } catch (error) {
-                    if (routeFunc?.handleError) {
-                        routeFunc.handleError(req, res, error);
-                    } else {
-                        oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, error);
+        const handle = async () => {
+            let result;
+
+            try {
+                if (routeFunc.handle.constructor.name === 'AsyncFunction') {
+                    result = await routeFunc.handle(req, res);
+                } else {
+                    result = routeFunc.handle(req, res);
+                    if (result instanceof Promise) {
+                        result = await result;
                     }
                 }
+            } catch (error) {
+                if (routeFunc?.handleError) {
+                    routeFunc.handleError(req, res, error);
+                } else {
+                    oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, error);
+                }
+                return;
+            }
+
+            const isIterable = result && typeof result[Symbol.iterator] === 'function';
+            const isAsyncIterable = result && typeof result[Symbol.asyncIterator] === 'function';
+
+            if ((isIterable || isAsyncIterable) && !res.sent) {
+                const rawObj = res.raw as any;
+                const uwsRes =
+                    rawObj.res && typeof rawObj.res.cork === 'function' ? rawObj.res : null;
+
+                const corkedOp = (op: () => void) => {
+                    if (uwsRes) {
+                        uwsRes.cork(op);
+                    } else {
+                        op();
+                    }
+                };
+
+                corkedOp(() => {
+                    res.raw.writeHead(200, {
+                        'Content-Type': 'text/event-stream',
+                        'Cache-Control': 'no-cache',
+                        Connection: 'keep-alive',
+                        'Access-Control-Allow-Origin': '*', // probably should change this in the near future tho
+                    });
+
+                    if (res.raw.flushHeaders) {
+                        res.raw.flushHeaders();
+                    }
+                });
+
+                let aborted = false;
+                const onAborted = () => {
+                    aborted = true;
+                };
+
+                if (res.raw.on) {
+                    res.raw.on('close', onAborted);
+                    res.raw.on('aborted', onAborted);
+                } else if (rawObj['onAborted']) {
+                    rawObj['onAborted'](onAborted);
+                }
+
+                try {
+                    if (isAsyncIterable) {
+                        for await (const chunk of result) {
+                            if (aborted || res.raw.destroyed) break;
+
+                            corkedOp(() => {
+                                res.raw.write(formatSSE(chunk));
+                            });
+                        }
+                    } else {
+                        for (const chunk of result) {
+                            if (aborted || res.raw.destroyed) break;
+
+                            corkedOp(() => {
+                                res.raw.write(formatSSE(chunk));
+                            });
+                        }
+                    }
+                } catch (err) {
+                    error(
+                        `Error while streaming response for ${route.method.toUpperCase()}:${route.url} - ${err.message}`,
+                        'SSE',
+                    );
+                } finally {
+                    if (res.raw.off) {
+                        res.raw.off('close', onAborted);
+                        res.raw.off('aborted', onAborted);
+                    }
+
+                    if (!aborted && !res.raw.destroyed) {
+                        corkedOp(() => {
+                            res.raw.end();
+                        });
+                    }
+                }
+                return;
+            }
+
+            if (!res.sent && result !== undefined) {
+                res.send(result);
             }
         };
 
@@ -334,8 +416,12 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
         if (route.fileInfo.hooks.length) {
             for (let index = 0; index < route.fileInfo.hooks.length; index++) {
                 const hookFun = route.fileInfo.hooks[index];
-                hookFun.prototype.handle(req, res, () => {
+                const hookInstance =
+                    typeof hookFun === 'function' ? new (hookFun as any)() : hookFun;
+
+                hookInstance.handle(req, res, () => {
                     //callback
+
                     if (index + 1 == route.fileInfo.hooks.length) {
                         //means all of the hooks passed through
 
@@ -366,9 +452,9 @@ function send404(req: FastifyRequest, res: FastifyReply) {
 }
 
 function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
-    if (!route.fn) return;
+    if (!route?.fn) return;
 
-    if (route.fn.prototype instanceof WebSocketRoute) {
+    if (route?.fn?.prototype instanceof WebSocketRoute) {
         const wsInstance = new route.fn() as WebSocketRoute;
         websocketRoutes[route.url] = wsInstance;
 
