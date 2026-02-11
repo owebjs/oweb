@@ -35,6 +35,9 @@ class _FastifyInstance {}
 
 export class Oweb extends _FastifyInstance {
     public _options: OwebOptions = {};
+
+    public _internalKV: Map<string, any> = new Map();
+
     private hmrDirectory: string;
     private hmrMatchersDirectory: string;
     private directory: string;
@@ -99,6 +102,12 @@ export class Oweb extends _FastifyInstance {
             );
         }
 
+        Object.defineProperty(fastify, '_internalKV', {
+            value: this._internalKV,
+            writable: true,
+            enumerable: false,
+        });
+
         Object.defineProperty(fastify, 'uServer', {
             value: this.uServer,
             writable: true,
@@ -145,6 +154,7 @@ export class Oweb extends _FastifyInstance {
         if (hmr?.enabled) {
             this.hmrDirectory = hmr.directory;
             this.hmrMatchersDirectory = hmr.matchersDirectory;
+            this._internalKV.set('hmr', true);
             success(`Hot Module Replacement enabled. Watching changes in ${hmr.directory}`, 'HMR');
         } else {
             warn(

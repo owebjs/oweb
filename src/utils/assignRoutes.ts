@@ -167,7 +167,7 @@ export const applyRouteHMR = async (
 
         const f = routes.find((x) => x.fileInfo.filePath == path);
 
-        if (f.fn.prototype instanceof WebSocketRoute) {
+        if (f?.fn?.prototype instanceof WebSocketRoute) {
             assignSpecificRoute(oweb, f);
             const end = Date.now() - start;
             success(`WebSocket Route ${f.url} created in ${end}ms`, 'HMR');
@@ -185,7 +185,7 @@ export const applyRouteHMR = async (
 
         const f = routes.find((x) => x.fileInfo.filePath == path);
 
-        if (f.fn.prototype instanceof WebSocketRoute) {
+        if (f?.fn?.prototype instanceof WebSocketRoute) {
             websocketRoutes[f.url] = new f.fn() as WebSocketRoute;
 
             const end = Date.now() - start;
@@ -295,7 +295,21 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
     const routeFunc = new route.fn();
     const matchers = route.matchers;
 
+    const isParametric = route.url.includes(':') || route.url.includes('*');
+
     return function (req: FastifyRequest, res: FastifyReply) {
+        if (oweb._internalKV.get('hmr') && isParametric) {
+            const currentPath = req.raw.url.split('?')[0];
+
+            const method = req.method.toLowerCase();
+
+            const specificHandler = temporaryRequests[method]?.[currentPath];
+
+            if (specificHandler && specificHandler !== temporaryRequests[route.method][route.url]) {
+                return specificHandler(req, res);
+            }
+        }
+
         const checkMatchers = () => {
             for (const matcher of matchers) {
                 const param = req.params[matcher.paramName];
