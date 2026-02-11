@@ -148,6 +148,25 @@ export default async function ({
                         headers[key] = value;
                     });
 
+                    const params = {};
+
+                    if (pattern.includes(':') || pattern.includes('*')) {
+                        const parts = pattern.split('/');
+                        let paramIndex = 0;
+
+                        for (const part of parts) {
+                            if (part.startsWith(':')) {
+                                const name = part.slice(1);
+
+                                params[name] = req.getParameter(paramIndex);
+                                paramIndex++;
+                            } else if (part === '*') {
+                                params['*'] = req.getParameter(paramIndex);
+                                paramIndex++;
+                            }
+                        }
+                    }
+
                     const secKey = headers['sec-websocket-key'];
                     const secProtocol = headers['sec-websocket-protocol'];
                     const secExtensions = headers['sec-websocket-extensions'];
@@ -161,9 +180,9 @@ export default async function ({
                         url: url + (query ? '?' + query : ''),
                         routerPath: pattern,
                         query: new URLSearchParams(query),
-                        headers: headers,
-                        method: method,
-                        params: {}, // TODO: implement params
+                        headers,
+                        method,
+                        params,
                         raw: { url, method, headers },
                     };
 
