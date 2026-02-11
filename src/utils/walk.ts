@@ -90,18 +90,19 @@ export const walk = async (
 
             const hooksImport = useHook.map((hookPath: string) => {
                 if (fallbackDir) {
-                    const findLastPath = hookPath.replace(process.cwd(), '').split('\\').at(-1);
+                    const relativeToRoot = path.relative(process.cwd(), hookPath);
 
-                    const additionNeeded = !fallbackDir.endsWith(`/${findLastPath}`);
+                    const normalizedFallback = fallbackDir.replace(/\\/g, '/').replace(/\/$/, '');
+                    const normalizedRel = relativeToRoot.replace(/\\/g, '/');
+
+                    let finalPath = normalizedRel;
+                    if (!normalizedRel.startsWith(normalizedFallback)) {
+                        finalPath = path.posix.join(normalizedFallback, normalizedRel);
+                    }
 
                     return (
-                        new URL(
-                            path.join(
-                                process.cwd(),
-                                fallbackDir,
-                                additionNeeded ? `/${findLastPath}` : '',
-                            ),
-                        ).pathname.replaceAll('\\', '/') + '/_hooks.js'
+                        new URL(`file://${path.join(process.cwd(), finalPath)}`).pathname +
+                        '/_hooks.js'
                     );
                 } else {
                     return (
