@@ -2,12 +2,13 @@ import Oweb from '../dist/index.js';
 import fastifyMultipart from '@fastify/multipart';
 import cors from '@fastify/cors';
 
-const app = await new Oweb({ uWebSocketsEnabled: false }).setup();
+const app = await new Oweb({ uWebSocketsEnabled: true }).setup();
 
 await app.register(fastifyMultipart, {
     limits: {
         fileSize: 20 * 1024 * 1024,
     },
+    attachFieldsToBody: true,
 });
 
 const allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'];

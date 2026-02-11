@@ -34,33 +34,57 @@ export default async function ({
 
     const uServer = uWS[appType](config).any('/*', (res, req) => {
         res.finished = false;
+        res.aborted = false;
 
-        const reqWrapper = new HttpRequest(req);
+        res.isPaused = false;
+
+        res.onAborted(() => {
+            res.aborted = true;
+            res.finished = true;
+        });
+
+        const reqWrapper = new HttpRequest(req, res);
         const resWrapper = new HttpResponse(res, uServer);
 
         reqWrapper.res = resWrapper;
         resWrapper.req = reqWrapper;
-
         reqWrapper.socket = resWrapper.socket;
 
-        const method = reqWrapper.method;
-        if (method !== 'HEAD') {
-            // 0http's low checks also that method !== 'GET', but many users would send request body with GET, unfortunately
-            res.onData((bytes, isLast) => {
-                const chunk = Buffer.from(bytes);
-                if (isLast) {
-                    reqWrapper.push(chunk);
-                    reqWrapper.push(null);
-                    if (!res.finished) {
-                        return handler(reqWrapper, resWrapper);
-                    }
-                    return;
-                }
+        const originalResume = res.resume;
 
-                return reqWrapper.push(chunk);
+        res.resume = function () {
+            if (res.isPaused && !res.finished && !res.aborted) {
+                res.isPaused = false;
+                originalResume.call(res);
+            }
+        };
+
+        handler(reqWrapper, resWrapper);
+
+        const method = reqWrapper.method;
+
+        // also check for finished state so that the 404 handler doesnt crap itself
+        if (method !== 'HEAD' && method !== 'GET' && !resWrapper.finished) {
+            res.onData((bytes, isLast) => {
+                if (res.finished || res.aborted) return;
+
+                const chunk = Buffer.from(bytes.slice(0));
+
+                const streamReady = reqWrapper.push(chunk);
+
+                if (isLast) {
+                    reqWrapper.complete = true;
+                    reqWrapper.push(null);
+                } else if (!streamReady) {
+                    if (!res.isPaused) {
+                        res.isPaused = true;
+                        res.pause();
+                    }
+                }
             });
-        } else if (!res.finished) {
-            handler(reqWrapper, resWrapper);
+        } else if (!resWrapper.finished) {
+            reqWrapper.complete = true;
+            reqWrapper.push(null);
         }
     });
 

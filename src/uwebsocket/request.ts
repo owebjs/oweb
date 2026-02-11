@@ -2,37 +2,49 @@ import { Readable } from 'stream';
 import { forEach } from './utils/object';
 
 export default class HttpRequest extends Readable {
-    req;
-    res;
-    url;
-    method;
-    statusCode;
-    statusMessage;
-    body;
-    headers;
-    socket;
+    public req: any;
+    public res: any;
+    public uResponse: any;
+    public url: string;
+    public method: string;
+    public statusCode: number | null;
+    public statusMessage: string | null;
+    public body: any;
+    public headers: Record<string, string>;
+    public socket: any;
 
-    constructor(uRequest) {
-        super();
+    // https://nodejs.org/api/http.html#class-httpincomingmessage
+    public complete: boolean = false;
+    public connection: any;
+
+    constructor(uRequest: any, uResponse: any) {
+        super({ highWaterMark: 64 * 1024 });
+
+        this.uResponse = uResponse;
+        this.req = uRequest;
 
         const q = uRequest.getQuery();
-        this.req = uRequest;
         this.url = uRequest.getUrl() + (q ? '?' + q : '');
         this.method = uRequest.getMethod().toUpperCase();
-        this.statusCode = null;
-        this.statusMessage = null;
         this.body = {};
         this.headers = {};
-        this.socket = {};
 
-        uRequest.forEach((header, value) => {
-            this.headers[header] = value;
+        this.socket = {
+            destroy: () => {},
+            on: () => {},
+            removeListener: () => {},
+        };
+
+        this.connection = this.socket;
+
+        uRequest.forEach((header: string, value: string) => {
+            this.headers[header.toLowerCase()] = value;
         });
     }
 
     getRawHeaders() {
-        const raw = [];
-        forEach(this.headers, (header, value) => {
+        const raw: string[] = [];
+        forEach(this.headers, (header: string, value: string) => {
             raw.push(header, value);
         });
         return raw;
@@ -42,8 +54,14 @@ export default class HttpRequest extends Readable {
         return this.req;
     }
 
-    _read(size) {
-        //@ts-ignore
-        return this.slice(0, size);
+    _read(_: number) {
+        // break the synchronous stack to avoid calling uResponse.resume() synchronously inside uWS.onData
+        if (this.uResponse) {
+            setImmediate(() => {
+                if (this.uResponse && !this.uResponse.aborted) {
+                    this.uResponse.resume();
+                }
+            });
+        }
     }
 }
