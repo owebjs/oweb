@@ -360,10 +360,10 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
 
                 corkedOp(() => {
                     res.raw.writeHead(200, {
+                        ...res.getHeaders(),
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
                         Connection: 'keep-alive',
-                        'Access-Control-Allow-Origin': '*', // probably should change this in the near future tho
                     });
 
                     if (res.raw.flushHeaders) {
