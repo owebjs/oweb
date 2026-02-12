@@ -1,8 +1,9 @@
 import { readdirSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { mergePaths } from './utils';
 import { Hook } from '../structures/Hook';
+import { warn } from './logger';
 
 export interface WalkResult {
     name: string;
@@ -72,10 +73,10 @@ export const walk = async (
             });
 
             const copyHooks = [hooks].flat(); //using toSorted would be great if it support node 16 and beyond
-            let scopingSort = copyHooks.sort((a: string, b: string) => b.length - a.length); //sort nearest
+            let scopingSort = copyHooks.sort((a: string, b: string) => b.length - a.length); // sort nearest
 
-            const scopeIndex = scopingSort.findIndex((path: string) => {
-                const lastdir = path.split('\\').at(-1);
+            const scopeIndex = scopingSort.findIndex((pathstr: string) => {
+                const lastdir = pathstr.split(path.sep).at(-1);
                 return lastdir.startsWith('(') && lastdir.endsWith(')');
             });
 
@@ -89,35 +90,35 @@ export const walk = async (
             }
 
             const hooksImport = useHook.map((hookPath: string) => {
+                let targetFile = '';
+
                 if (fallbackDir) {
-                    const relativeToRoot = path.relative(process.cwd(), hookPath);
-
-                    const normalizedFallback = fallbackDir.replace(/\\/g, '/').replace(/\/$/, '');
-                    const normalizedRel = relativeToRoot.replace(/\\/g, '/');
-
-                    let finalPath = normalizedRel;
-                    if (!normalizedRel.startsWith(normalizedFallback)) {
-                        finalPath = path.posix.join(normalizedFallback, normalizedRel);
+                    let rootWalkDir = directoryResolve;
+                    for (let i = 0; i < tree.length; i++) {
+                        rootWalkDir = path.dirname(rootWalkDir);
                     }
 
-                    return (
-                        new URL(`file://${path.join(process.cwd(), finalPath)}`).pathname +
-                        '/_hooks.js'
-                    );
+                    const relHook = path.relative(rootWalkDir, hookPath);
+
+                    const targetDir = path.join(process.cwd(), fallbackDir, relHook);
+                    targetFile = path.join(targetDir, '_hooks.js');
                 } else {
-                    return (
-                        new URL(hookPath, `file://${__dirname}`).pathname.replaceAll('\\', '/') +
-                        '/_hooks.js'
-                    );
+                    targetFile = path.join(hookPath, '_hooks.js');
                 }
+
+                return pathToFileURL(targetFile).href;
             });
 
             const hookFunctions = [];
 
             for (const importPath of hooksImport) {
-                const imp = await import(importPath);
-                if (imp?.default) {
-                    hookFunctions.push(imp.default);
+                try {
+                    const imp = await import(importPath);
+                    if (imp?.default) {
+                        hookFunctions.push(imp.default);
+                    }
+                } catch (e) {
+                    warn(`Failed to load hook from ${importPath}. Make sure the file exists.`);
                 }
             }
 
