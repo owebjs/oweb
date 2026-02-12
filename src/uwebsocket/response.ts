@@ -89,9 +89,10 @@ export default class HttpResponse extends Writable {
     write(data) {
         if (this.finished) return;
 
-        this._flushHeaders();
-
-        this.res.write(data);
+        this.res.cork(() => {
+            this._flushHeaders();
+            this.res.write(data);
+        });
     }
 
     writeHead(statusCode) {
@@ -116,21 +117,17 @@ export default class HttpResponse extends Writable {
     end(data) {
         if (this.finished) return;
 
-        const self = this;
+        this.res.cork(() => {
+            this._flushHeaders();
 
-        function doWrite() {
-            self._flushHeaders();
+            this.finished = true;
 
-            self.finished = true;
-
-            self.res.end(data);
-        }
-
-        if (!data) {
-            data = '';
-        }
-
-        return doWrite();
+            if (!data) {
+                this.res.end();
+            } else {
+                this.res.end(data);
+            }
+        });
     }
 
     getRaw() {
