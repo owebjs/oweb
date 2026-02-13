@@ -23,7 +23,6 @@ export default async function ({
     let handler = (req, res) => {
         res.statusCode = 404;
         res.statusMessage = 'Not Found';
-
         res.end();
     };
 
@@ -35,7 +34,6 @@ export default async function ({
     const uServer = uWS[appType](config).any('/*', (res, req) => {
         res.finished = false;
         res.aborted = false;
-
         res.isPaused = false;
 
         res.onAborted(() => {
@@ -51,7 +49,6 @@ export default async function ({
         reqWrapper.socket = resWrapper.socket;
 
         const originalResume = res.resume;
-
         res.resume = function () {
             if (res.isPaused && !res.finished && !res.aborted) {
                 res.isPaused = false;
@@ -69,7 +66,6 @@ export default async function ({
                 if (res.finished || res.aborted) return;
 
                 const chunk = Buffer.from(bytes.slice(0));
-
                 const streamReady = reqWrapper.push(chunk);
 
                 if (isLast) {
@@ -111,26 +107,24 @@ export default async function ({
         }
 
         close(cb) {
-            uWS.us_listen_socket_close(uServer._socket);
-            if (!cb) return;
-            return cb();
+            if (uServer._socket) {
+                uWS.us_listen_socket_close(uServer._socket);
+                uServer._socket = null;
+            }
+            if (cb) cb();
         }
 
         start(host, port, cb) {
-            let args;
-            const callbackFunction = function (socket) {
-                uServer._socket = socket;
-                if (cb) cb(socket);
+            const callbackFunction = function (token) {
+                uServer._socket = token;
+                if (cb) cb(token);
             };
-            if (host && port && cb) {
-                args = [host, port, callbackFunction];
+
+            if (host && port) {
+                return uServer.listen(host, port, callbackFunction);
+            } else {
+                return uServer.listen(port || host, callbackFunction);
             }
-            if (!cb && (!port || typeof port === 'function')) {
-                cb = port;
-                port = host;
-                args = [port, callbackFunction];
-            }
-            return uServer.listen(...args);
         }
 
         listen(host, port, cb) {
@@ -138,20 +132,32 @@ export default async function ({
                 const listenOptions = host;
                 port = listenOptions.port;
                 cb = listenOptions.cb;
-                host = listenOptions.host;
-                return this.start(host, port, (socket) => {
-                    uServer._socket = socket;
-                    if (cb) cb(socket);
+                host = listenOptions.host || '0.0.0.0';
+
+                return this.start(host, port, (token) => {
+                    if (token) {
+                        uServer._socket = token;
+
+                        if (cb) cb(null, `http://${host}:${port}`);
+                    } else {
+                        if (cb) cb(new Error(`Failed to listen on ${host}:${port}`));
+                    }
                 });
             } else {
                 if ((!port || typeof port === 'function') && !cb) {
                     cb = port;
                     port = host;
-                    //@ts-ignore
-                    return this.start(port, cb);
-                } else {
-                    return this.start(host, port, cb);
+                    host = '0.0.0.0';
                 }
+
+                return this.start(host, port, (token) => {
+                    if (token) {
+                        uServer._socket = token;
+                        if (cb) cb(null, `http://${host}:${port}`);
+                    } else {
+                        if (cb) cb(new Error(`Failed to listen on ${host}:${port}`));
+                    }
+                });
             }
         }
 
@@ -181,7 +187,6 @@ export default async function ({
                         for (const part of parts) {
                             if (part.startsWith(':')) {
                                 const name = part.slice(1);
-
                                 params[name] = req.getParameter(paramIndex);
                                 paramIndex++;
                             } else if (part === '*') {
