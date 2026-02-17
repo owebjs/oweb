@@ -32,6 +32,10 @@ export default class HttpResponse extends Writable {
         });
     }
 
+    public get sent() {
+        return this.finished;
+    }
+
     setHeader(name, value) {
         this.__headers[toLowerCase(name)] = value;
     }

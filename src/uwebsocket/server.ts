@@ -220,6 +220,9 @@ export default async function ({
                         statusCode: 200,
                         _headers: {},
                         finished: false,
+                        get sent() {
+                            return this.finished;
+                        },
 
                         header(key, value) {
                             this._headers[key.toLowerCase()] = value;

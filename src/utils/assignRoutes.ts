@@ -342,36 +342,59 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
                 return;
             }
 
+            if (res.sent) return;
+
             const isIterable = result && typeof result[Symbol.iterator] === 'function';
             const isAsyncIterable = result && typeof result[Symbol.asyncIterator] === 'function';
 
-            if ((isIterable || isAsyncIterable) && !res.sent) {
+            if (isIterable || isAsyncIterable) {
+                // we don't send headers yet. we must pull the first chunk to see
+                // if the user executes .send instead of yielding
+
+                const iterator = isAsyncIterable
+                    ? result[Symbol.asyncIterator]()
+                    : result[Symbol.iterator]();
+
+                let firstChunk;
+
+                try {
+                    firstChunk = await iterator.next();
+                } catch (err) {
+                    // if occurs before the first yield
+                    if (routeFunc?.handleError) routeFunc.handleError(req, res, err);
+                    else oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, err);
+                    return;
+                }
+
+                if (res.sent) return;
+
+                if (firstChunk.done) {
+                    if (firstChunk.value !== undefined) res.send(firstChunk.value);
+                    return;
+                }
+
                 const rawObj = res.raw as any;
                 const uwsRes =
                     rawObj.res && typeof rawObj.res.cork === 'function' ? rawObj.res : null;
 
                 const corkedOp = (op: () => void) => {
-                    if (uwsRes) {
-                        uwsRes.cork(op);
-                    } else {
-                        op();
-                    }
+                    if (uwsRes) uwsRes.cork(op);
+                    else op();
                 };
 
                 corkedOp(() => {
-                    res.raw.writeHead(200, {
+                    const headers = {
                         ...res.getHeaders(),
                         'Content-Type': 'text/event-stream',
                         'Cache-Control': 'no-cache',
                         Connection: 'keep-alive',
-                    });
-
-                    if (res.raw.flushHeaders) {
-                        res.raw.flushHeaders();
-                    }
+                    };
+                    res.raw.writeHead(200, headers);
+                    if (res.raw.flushHeaders) res.raw.flushHeaders();
                 });
 
                 let aborted = false;
+
                 const onAborted = () => {
                     aborted = true;
                 };
@@ -384,22 +407,19 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
                 }
 
                 try {
-                    if (isAsyncIterable) {
-                        for await (const chunk of result) {
-                            if (aborted || res.raw.destroyed) break;
+                    corkedOp(() => {
+                        res.raw.write(formatSSE(firstChunk.value));
+                    });
 
-                            corkedOp(() => {
-                                res.raw.write(formatSSE(chunk));
-                            });
-                        }
-                    } else {
-                        for (const chunk of result) {
-                            if (aborted || res.raw.destroyed) break;
+                    while (true) {
+                        if (aborted || res.raw.destroyed) break;
+                        const chunk = await iterator.next();
 
-                            corkedOp(() => {
-                                res.raw.write(formatSSE(chunk));
-                            });
-                        }
+                        if (chunk.done) break;
+
+                        corkedOp(() => {
+                            res.raw.write(formatSSE(chunk.value));
+                        });
                     }
                 } catch (err) {
                     error(
