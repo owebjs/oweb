@@ -1,6 +1,7 @@
 import { Writable } from 'stream';
 import { toLowerCase } from './utils/string.js';
 import HttpResponseSocket from './responseSocket';
+import http from 'node:http';
 
 export default class HttpResponse extends Writable {
     res;
@@ -20,8 +21,7 @@ export default class HttpResponse extends Writable {
         this.server = uServer;
 
         this.statusCode = 200;
-        this.statusMessage = 'OK';
-
+        this.statusMessage = null;
         this.__headers = {};
         this.headersSent = false;
 
@@ -60,7 +60,8 @@ export default class HttpResponse extends Writable {
     _flushHeaders() {
         if (this.headersSent) return;
 
-        this.res.writeStatus(`${this.statusCode} ${this.statusMessage}`);
+        const message = this.statusMessage || http.STATUS_CODES[this.statusCode] || 'Unknown';
+        this.res.writeStatus(`${this.statusCode} ${message}`);
 
         const keys = Object.keys(this.__headers);
         for (let i = 0; i < keys.length; i++) {
@@ -72,7 +73,6 @@ export default class HttpResponse extends Writable {
             }
 
             const value = this.__headers[key];
-
             if (Array.isArray(value)) {
                 for (let j = 0; j < value.length; j++) {
                     this.res.writeHeader(key, String(value[j]));

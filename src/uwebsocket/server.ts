@@ -3,6 +3,7 @@ const REQUEST_EVENT = 'request';
 
 import HttpRequest from './request';
 import HttpResponse from './response';
+import http from 'node:http';
 
 export default async function ({
     cert_file_name,
@@ -232,7 +233,9 @@ export default async function ({
                             if (aborted || this.finished) return;
                             this.finished = true;
 
-                            res.writeStatus(`${this.statusCode} Response`);
+                            const message = http.STATUS_CODES[this.statusCode] || 'Response';
+                            res.writeStatus(`${this.statusCode} ${message}`);
+
                             for (const [k, v] of Object.entries(this._headers)) {
                                 res.writeHeader(k, String(v));
                             }
