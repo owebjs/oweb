@@ -6,11 +6,14 @@ import Fastify, {
     type FastifyReply,
     type RawServerDefault,
 } from 'fastify';
+import type { FSWatcher } from 'chokidar';
 import { applyMatcherHMR, applyRouteHMR, assignRoutes } from '../utils/assignRoutes';
 import { watchDirectory } from '../utils/watcher';
 import { info, success, warn } from '../utils/logger';
 
 import websocketPlugin from '@fastify/websocket';
+
+const HMR_WATCHERS_KEY = 'hmr:watchers';
 
 export interface OwebOptions extends FastifyServerOptions {
     uWebSocketsEnabled?: boolean;
@@ -62,6 +65,32 @@ export class Oweb extends _FastifyInstance {
         };
     }
 
+    private getHmrWatchers(): FSWatcher[] {
+        let watchers = this._internalKV.get(HMR_WATCHERS_KEY) as FSWatcher[] | undefined;
+
+        if (!watchers) {
+            watchers = [];
+            this._internalKV.set(HMR_WATCHERS_KEY, watchers);
+        }
+
+        return watchers;
+    }
+
+    private async closeHMRWatchers() {
+        const watchers = this.getHmrWatchers();
+
+        if (!watchers.length) return;
+
+        const activeWatchers = watchers.splice(0, watchers.length);
+        await Promise.all(
+            activeWatchers.map(async (watcher) => {
+                try {
+                    await watcher.close();
+                } catch {}
+            }),
+        );
+    }
+
     /**
      *
      * Returns a fastify instance with the Oweb prototype methods
@@ -90,6 +119,21 @@ export class Oweb extends _FastifyInstance {
         fastify.addHook('onRequest', (_, res, done) => {
             res.header('X-Powered-By', 'Oweb');
             done();
+        });
+
+        const internalKV = this._internalKV;
+        fastify.addHook('onClose', async () => {
+            const watchers = internalKV.get(HMR_WATCHERS_KEY) as FSWatcher[] | undefined;
+            if (!watchers?.length) return;
+
+            const activeWatchers = watchers.splice(0, watchers.length);
+            await Promise.all(
+                activeWatchers.map(async (watcher) => {
+                    try {
+                        await watcher.close();
+                    } catch {}
+                }),
+            );
         });
 
         for (const key in Object.getOwnPropertyDescriptors(Oweb.prototype)) {
@@ -157,6 +201,8 @@ export class Oweb extends _FastifyInstance {
             this._internalKV.set('hmr', true);
             success(`Hot Module Replacement enabled. Watching changes in ${hmr.directory}`, 'HMR');
         } else {
+            this._internalKV.set('hmr', false);
+            void this.closeHMRWatchers();
             warn(
                 'Hot Module Replacement is disabled. Use "await app.loadRoutes({ hmr: { enabled: true, directory: path } })" to enable it.',
                 'HMR',
@@ -170,13 +216,18 @@ export class Oweb extends _FastifyInstance {
      *
      * Watches for changes in the routes directory
      */
-    private watch() {
-        watchDirectory(this.hmrDirectory, true, (op, path, content) => {
+    private async watch() {
+        await this.closeHMRWatchers();
+
+        const watchers = this.getHmrWatchers();
+
+        const routeWatcher = watchDirectory(this.hmrDirectory, true, (op, path, content) => {
             applyRouteHMR(this, op, this.hmrDirectory, this.directory, path, content);
         });
+        watchers.push(routeWatcher);
 
         if (this.hmrMatchersDirectory) {
-            watchDirectory(this.hmrMatchersDirectory, true, (op, path, content) => {
+            const matcherWatcher = watchDirectory(this.hmrMatchersDirectory, true, (op, path, content) => {
                 applyMatcherHMR(
                     this,
                     op,
@@ -186,6 +237,8 @@ export class Oweb extends _FastifyInstance {
                     content,
                 );
             });
+
+            watchers.push(matcherWatcher);
         }
     }
 
@@ -203,7 +256,11 @@ export class Oweb extends _FastifyInstance {
         return new Promise<{ err: Error; address: string }>((resolve) => {
             this.listen({ port, host }, (err, address) => {
                 if (process.env.NODE_ENV !== 'production') {
-                    if (this.hmrDirectory) this.watch();
+                    if (this.hmrDirectory) {
+                        this.watch().catch((watchError) => {
+                            warn(`HMR watcher failed to initialize: ${watchError.message}`, 'HMR');
+                        });
+                    }
                 } else {
                     info(
                         'Hot Module Replacement is disabled in production mode. NODE_ENV is set to production.',
