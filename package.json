@@ -22,8 +22,9 @@
     "scripts": {
         "start": "node .",
         "build": "tsup",
-        "dev": "tsup && node .",
-        "test": "tsup && node test/index.js",
+        "dev": "tsup && node test/index.js",
+        "test": "tsup && vitest run --config test/vitest.config.mts",
+        "test:watch": "tsup && vitest --config test/vitest.config.mts",
         "format": "prettier --write . --ignore-path .gitignore"
     },
     "homepage": "https://github.com/owebjs/oweb",
@@ -59,7 +60,8 @@
         "prettier": "^3.0.3",
         "tslib": "^2.6.2",
         "tsup": "^8.5.0",
-        "typescript": "^5.2.2"
+        "typescript": "^5.2.2",
+        "vitest": "^3.2.4"
     },
     "type": "module",
     "pnpm": {
