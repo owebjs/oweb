@@ -16,6 +16,7 @@ export default class HttpRequest extends Readable {
     // https://nodejs.org/api/http.html#class-httpincomingmessage
     public complete: boolean = false;
     public connection: any;
+    private resumeScheduled: boolean = false;
 
     constructor(uRequest: any, uResponse: any) {
         super({ highWaterMark: 64 * 1024 });
@@ -55,13 +56,20 @@ export default class HttpRequest extends Readable {
     }
 
     _read(_: number) {
-        // break the synchronous stack to avoid calling uResponse.resume() synchronously inside uWS.onData
-        if (this.uResponse) {
-            setImmediate(() => {
-                if (this.uResponse && !this.uResponse.aborted) {
-                    this.uResponse.resume();
-                }
-            });
-        }
+        const uRes = this.uResponse;
+
+        if (!uRes || uRes.aborted || uRes.finished || !uRes.isPaused) return;
+        if (this.resumeScheduled) return;
+
+        this.resumeScheduled = true;
+
+        setImmediate(() => {
+            this.resumeScheduled = false;
+
+            const res = this.uResponse;
+            if (res && !res.aborted && !res.finished && res.isPaused) {
+                res.resume();
+            }
+        });
     }
 }
