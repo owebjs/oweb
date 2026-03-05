@@ -445,28 +445,57 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
                 res.send(result);
             }
         };
-
         //assign hooks if exists
         if (route.fileInfo.hooks.length) {
-            for (let index = 0; index < route.fileInfo.hooks.length; index++) {
-                const hookFun = route.fileInfo.hooks[index];
+            let hookIndex = 0;
+
+            const failWithHookError = (hookErr: unknown) => {
+                const normalizedError =
+                    hookErr instanceof Error ? hookErr : new Error(String(hookErr));
+
+                if (routeFunc?.handleError) {
+                    routeFunc.handleError(req, res, normalizedError);
+                } else {
+                    oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, normalizedError);
+                }
+            };
+
+            const runNextHook = (hookErr?: unknown) => {
+                if (hookErr) {
+                    failWithHookError(hookErr);
+                    return;
+                }
+
+                if (res.sent) return;
+
+                if (hookIndex >= route.fileInfo.hooks.length) {
+                    if (!checkMatchers()) {
+                        send404(req, res);
+                    } else {
+                        handle();
+                    }
+                    return;
+                }
+
+                const hookFun = route.fileInfo.hooks[hookIndex++];
                 const hookInstance =
                     typeof hookFun === 'function' ? new (hookFun as any)() : hookFun;
 
-                hookInstance.handle(req, res, () => {
-                    //callback
+                let doneCalled = false;
+                const done = (doneErr?: unknown) => {
+                    if (doneCalled) return;
+                    doneCalled = true;
+                    runNextHook(doneErr);
+                };
 
-                    if (index + 1 == route.fileInfo.hooks.length) {
-                        //means all of the hooks passed through
+                try {
+                    hookInstance.handle(req, res, done);
+                } catch (err) {
+                    done(err);
+                }
+            };
 
-                        if (!checkMatchers()) {
-                            send404(req, res);
-                        } else {
-                            handle();
-                        }
-                    }
-                });
-            }
+            runNextHook();
         } else {
             if (!checkMatchers()) {
                 send404(req, res);
