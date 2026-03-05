@@ -32,6 +32,13 @@ export default async function ({
         key_file_name,
     };
 
+    const copyArrayBufferToBuffer = (bytes: ArrayBuffer): Buffer => {
+        const src = new Uint8Array(bytes);
+        const out = Buffer.allocUnsafe(src.byteLength);
+        out.set(src);
+        return out;
+    };
+
     const uServer = uWS[appType](config).any('/*', (res, req) => {
         res.finished = false;
         res.aborted = false;
@@ -64,19 +71,20 @@ export default async function ({
         // also check for finished state so that the 404 handler doesnt crap itself
         if (method !== 'HEAD' && method !== 'GET' && !resWrapper.finished) {
             res.onData((bytes, isLast) => {
-                if (res.finished || res.aborted) return;
+                if (res.finished || res.aborted || reqWrapper.destroyed) return;
 
-                const chunk = Buffer.from(bytes.slice(0));
+                const chunk = copyArrayBufferToBuffer(bytes);
                 const streamReady = reqWrapper.push(chunk);
 
                 if (isLast) {
                     reqWrapper.complete = true;
                     reqWrapper.push(null);
-                } else if (!streamReady) {
-                    if (!res.isPaused) {
-                        res.isPaused = true;
-                        res.pause();
-                    }
+                    return;
+                }
+
+                if (!streamReady && !res.isPaused) {
+                    res.isPaused = true;
+                    res.pause();
                 }
             });
         } else if (!resWrapper.finished) {
@@ -250,49 +258,67 @@ export default async function ({
                             return this;
                         },
                     };
+                    const sendUpgradeError = (hookError: any) => {
+                        if (aborted || resWrapper.finished) return;
 
-                    try {
-                        for (const HookClass of hooks) {
-                            if (aborted || resWrapper.finished) return;
+                        const normalizedError =
+                            hookError instanceof Error ? hookError : new Error(String(hookError));
 
-                            await new Promise((resolve, reject) => {
-                                try {
-                                    const hookInstance =
-                                        typeof HookClass === 'function'
-                                            ? new HookClass()
-                                            : HookClass;
-
-                                    hookInstance.handle(reqWrapper, resWrapper, (err) => {
-                                        if (err) reject(err);
-                                        else resolve(true);
-                                    });
-                                } catch (err) {
-                                    reject(err);
-                                }
-                            });
-                        }
-                    } catch (err) {
-                        if (!aborted && !resWrapper.finished) {
-                            console.error('WebSocket Hook Error:', err);
-                            res.writeStatus('500 Internal Server Error');
-                            res.end(
-                                JSON.stringify({
-                                    error: 'Internal Server Error',
-                                    message: err.message,
-                                }),
-                            );
-                        }
-                        return;
-                    }
-
-                    if (aborted || resWrapper.finished) return;
-
-                    const reqData = {
-                        ...reqWrapper,
-                        query: query,
+                        console.error('WebSocket Hook Error:', normalizedError);
+                        res.writeStatus('500 Internal Server Error');
+                        res.end(
+                            JSON.stringify({
+                                error: 'Internal Server Error',
+                                message: normalizedError.message,
+                            }),
+                        );
                     };
 
-                    res.upgrade({ req: reqData }, secKey, secProtocol, secExtensions, context);
+                    const finishUpgrade = () => {
+                        if (aborted || resWrapper.finished) return;
+
+                        const reqData = {
+                            ...reqWrapper,
+                            query: query,
+                        };
+
+                        res.upgrade({ req: reqData }, secKey, secProtocol, secExtensions, context);
+                    };
+
+                    let hookIndex = 0;
+
+                    const runNextHook = (hookError?: any) => {
+                        if (hookError) {
+                            sendUpgradeError(hookError);
+                            return;
+                        }
+
+                        if (aborted || resWrapper.finished) return;
+
+                        if (hookIndex >= hooks.length) {
+                            finishUpgrade();
+                            return;
+                        }
+
+                        const HookClass = hooks[hookIndex++];
+                        const hookInstance =
+                            typeof HookClass === 'function' ? new HookClass() : HookClass;
+
+                        let doneCalled = false;
+                        const done = (doneError?: any) => {
+                            if (doneCalled) return;
+                            doneCalled = true;
+                            runNextHook(doneError);
+                        };
+
+                        try {
+                            hookInstance.handle(reqWrapper, resWrapper, done);
+                        } catch (err) {
+                            done(err);
+                        }
+                    };
+
+                    runNextHook();
                 },
 
                 open: (ws) => {
