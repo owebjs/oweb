@@ -1,22 +1,34 @@
 # Oweb
 
-A flexible and modern web framework built on top of Fastify, designed for creating scalable and maintainable web applications with file-based routing and hot module replacement.
-
 <p align="center">
-  <img src="https://img.shields.io/npm/v/owebjs" alt="npm version">
-  <img src="https://img.shields.io/npm/l/owebjs" alt="license">
-  <img src="https://img.shields.io/npm/dt/owebjs" alt="downloads">
+  <strong>A high-performance file-based web framework with seamless Fastify compatibility and native real-time capabilities</strong><br/>
+  Build APIs and real-time endpoints with a clean folder structure and fast iteration.
 </p>
 
-## Features
+<p align="center">
+  <a href="https://www.npmjs.com/package/owebjs"><img src="https://img.shields.io/npm/v/owebjs" alt="npm version"></a>
+  <a href="https://www.npmjs.com/package/owebjs"><img src="https://img.shields.io/npm/dm/owebjs" alt="npm downloads"></a>
+  <a href="https://github.com/owebjs/oweb/blob/main/LICENSE"><img src="https://img.shields.io/npm/l/owebjs" alt="license"></a>
+</p>
 
-- **File-based Routing**: Automatically generate routes based on your file structure
-- **Hot Module Replacement (HMR)**: Update your routes without restarting the server
-- **Middleware Support**: Use hooks to add middleware functionality
-- **Error Handling**: Global and route-specific error handling
-- **TypeScript Support**: Built with TypeScript for better developer experience
-- **Plugin System**: Extend functionality with plugins
-- **uWebSockets.js Support**: Optional high-performance WebSocket server
+## What Is Oweb?
+
+Oweb is a route-per-file framework built on Fastify, with an optional **uWebSockets runtime mode** for high-throughput workloads.
+
+You keep Fastify compatibility and plugin ergonomics, while getting a cleaner architecture, built-in HMR, and first-class SSE/WebSocket support.
+
+## Feature Overview
+
+- **Dual runtime**: Fastify-compatible default runtime + optional `uWebSockets.js` runtime
+- File-based routing
+- Dynamic params (`[id]`), method files (`.post`, `.put`, ...), and matcher params (`[id=integer]`)
+- Hierarchical hooks via `_hooks.js` / `_hooks.ts`
+- Route-level and global error handling
+- Built-in HMR for routes and matchers
+- SSE via iterable / async-iterable route handlers
+- WebSocket routes with `WebSocketRoute`
+- Fastify plugin ecosystem support
+- TypeScript-first codebase and typings
 
 ## Installation
 
@@ -24,247 +36,393 @@ A flexible and modern web framework built on top of Fastify, designed for creati
 npm install owebjs
 ```
 
-## Quick Start
+## Runtime Modes (Fastify vs uWebSockets)
 
-```javascript
+Use the same Oweb API in both modes.
+
+### Default mode (Fastify runtime)
+
+```js
 import Oweb from 'owebjs';
 
-// Create and setup the app
 const app = await new Oweb().setup();
+```
 
-// Load routes from a directory
+### High-performance mode (uWebSockets runtime)
+
+```js
+import Oweb from 'owebjs';
+
+const app = await new Oweb({ uWebSocketsEnabled: true }).setup();
+```
+
+When to prefer `uWebSocketsEnabled: true`:
+
+- very high connection count
+- aggressive WebSocket usage
+- throughput-focused deployments
+
+## Benchmark
+
+**Machine**: Ryzen 5 5500, 16GB RAM, 6C/12T, SSD (Base 3.60 GHz, boost ~4.1 GHz observed)
+
+**Method**: `autocannon -c 100 -d 40 -p 10 localhost:3000` \* 2, taking the
+second average
+
+| Runtime                   | Version   |    RPS |
+| ------------------------- | --------- | -----: |
+| uWebSockets.js            | 20.52.0   | 79,149 |
+| Oweb (uWS)                | 1.5.7-dev | 70,535 |
+| Fastify                   | 4.23.2    | 46,238 |
+| Oweb (Fastify)            | 1.5.7-dev | 42,570 |
+| Node.js http.createServer | 24.5.0    | 42,544 |
+
+## First App (2 Minutes)
+
+Start with a minimal app, then we will add route conventions step by step.
+
+```js
+import Oweb from 'owebjs';
+
+const app = await new Oweb({ uWebSocketsEnabled: true }).setup();
+
 await app.loadRoutes({
     directory: 'routes',
-    hmr: {
-        enabled: true, // Enable hot module replacement
-    },
-});
-
-// Start the server
-await app.start({ port: 3000 });
-console.log('Server running at http://localhost:3000');
-```
-
-## Creating Routes
-
-Routes are automatically generated based on your file structure. Create a file in your routes directory:
-
-```javascript
-// routes/hello.js
-import { Route } from 'owebjs';
-
-export default class extends Route {
-    async handle(req, res) {
-        res.send({ message: 'Hello, World!' });
-    }
-}
-```
-
-This will create a GET route at `/hello`.
-
-### Dynamic Routes
-
-Use brackets to create dynamic route parameters:
-
-```javascript
-// routes/users/[id].js
-import { Route } from 'owebjs';
-
-export default class extends Route {
-    async handle(req, res) {
-        res.send({ userId: req.params.id });
-    }
-}
-```
-
-This will create a GET route at `/users/:id`.
-
-### Parameter Validation with Matchers
-
-Use matchers to validate dynamic route parameters:
-
-```javascript
-// routes/users/[id=integer].js
-import { Route } from 'owebjs';
-
-export default class extends Route {
-    async handle(req, res) {
-        res.send({ userId: req.params.id });
-    }
-}
-```
-
-```javascript
-// matchers/integer.js
-export default function (val) {
-    return !isNaN(val);
-}
-```
-
-Then configure Oweb to use your matchers directory:
-
-```javascript
-await app.loadRoutes({
-    directory: 'routes',
-    matchersDirectory: 'matchers', // Directory containing custom matchers
     hmr: {
         enabled: true,
-        matchersDirectory: 'matchers', // Optional: Enable HMR for matchers
+    },
+});
+
+const { err, address } = await app.start({ port: 3000, host: '127.0.0.1' });
+if (err) throw err;
+
+console.log(`Server running at ${address}`);
+```
+
+What this does:
+
+- Creates an Oweb app instance (here in uWebSockets mode)
+- Loads your route files from `routes/`
+- Enables HMR for development
+- Starts the HTTP server
+
+## How Oweb Maps Files to URLs
+
+The file system is the routing table. Here is a representative structure:
+
+```txt
+routes/
+  _hooks.js
+  hello.js
+  users/
+    [id].js
+  auth/
+    login.post.js
+  matcher/
+    [id=integer].js
+  events/
+    sse.js
+  ws/
+    echo.js
+
+matchers/
+  integer.js
+```
+
+Now let's go through each convention in isolation.
+
+## Routing Conventions
+
+### 1) Basic route
+
+Use a normal file for a `GET` route.
+
+`routes/hello.js` -> `GET /hello`
+
+```js
+import { Route } from 'owebjs';
+
+export default class HelloRoute extends Route {
+    handle() {
+        return { message: 'hello-world' };
+    }
+}
+```
+
+### 2) Dynamic params
+
+Put parameter names in brackets.
+
+`routes/users/[id].js` -> `GET /users/:id`
+
+```js
+import { Route } from 'owebjs';
+
+export default class UserRoute extends Route {
+    handle(req) {
+        return { id: req.params.id };
+    }
+}
+```
+
+### 3) HTTP method suffix
+
+Use filename suffixes when an endpoint is not `GET`.
+
+`routes/auth/login.post.js` -> `POST /auth/login`
+
+Supported suffixes: `.get`, `.post`, `.put`, `.patch`, `.delete`
+
+```js
+import { Route } from 'owebjs';
+
+export default class LoginPostRoute extends Route {
+    handle(req, res) {
+        return res.status(201).send({ method: req.method, body: req.body });
+    }
+}
+```
+
+### 4) Matcher params
+
+Matcher params add filename-level validation.
+
+`routes/matcher/[id=integer].js` + `matchers/integer.js`
+
+```js
+// matchers/integer.js
+export default function integerMatcher(value) {
+    return /^-?\d+$/.test(String(value));
+}
+```
+
+Then register the matcher directory:
+
+```js
+await app.loadRoutes({
+    directory: 'routes',
+    matchersDirectory: 'matchers',
+    hmr: {
+        enabled: true,
+        matchersDirectory: 'matchers',
     },
 });
 ```
 
-Now you can use your custom matchers in route filenames with the syntax `[paramName=matcherName]`.
+If the matcher returns `false`, the route is treated as not matched.
 
-### HTTP Methods
+## Hooks (Directory Middleware)
 
-Specify the HTTP method in the filename:
+Hooks are defined with `_hooks.js` and run for that folder scope.
 
-```javascript
-// routes/api/users.post.js
-import { Route } from 'owebjs';
+Example root hook:
 
-export default class extends Route {
-    async handle(req, res) {
-        // Create a new user
-        const user = req.body;
-        res.status(201).send({ id: 1, ...user });
-    }
-}
-```
-
-## Middleware (Hooks)
-
-Create hooks to add middleware functionality:
-
-```javascript
-// routes/_hooks.js
+```js
 import { Hook } from 'owebjs';
 
-export default class extends Hook {
-    handle(req, res, done) {
-        console.log(`${req.method} ${req.url}`);
-        done(); // Continue to the next hook or route handler
+export default class RootHook extends Hook {
+    handle(req, _res, done) {
+        req.locals ??= {};
+        req.locals.trace = ['root'];
+        done();
     }
 }
 ```
 
-Hooks are applied to all routes in the current directory and its subdirectories.
+Key behavior:
+
+- Hooks apply to the current directory and child directories
+- Nested folders can add more hooks
+- Hooks run before the route handler
+- Scoped folders using parentheses (like `(admin)`) creates a hook boundary
+
+### Scoped hook groups
+
+Oweb's route walker inspects parent hook paths and looks for the nearest folder whose name is wrapped in parentheses (for example `(api)` or `(admin)`).
+
+When such a folder exists, hook resolution is cut at that scope boundary. In practice, hooks above that scoped folder are excluded.
+
+Example:
+
+```txt
+routes/
+  _hooks.js                # global hook
+  (admin)/
+    _hooks.js              # admin scope boundary hook
+    users/
+      _hooks.js
+      [id].js
+```
+
+For `routes/(admin)/users/[id].js`, Oweb uses hooks inside that scoped chain and stops climbing above the `(admin)` boundary.
 
 ## Error Handling
 
-### Global Error Handler
+You can handle errors globally, or per route when you need custom behavior.
 
-```javascript
+### Global internal error handler
+
+```js
 app.setInternalErrorHandler((req, res, error) => {
-    console.error(error);
     res.status(500).send({
-        error: 'Internal Server Error',
+        source: 'global-handler',
         message: error.message,
     });
 });
 ```
 
-### Route-specific Error Handler
+### Route-specific `handleError`
 
-```javascript
+```js
 import { Route } from 'owebjs';
 
-export default class extends Route {
-    async handle(req, res) {
-        throw new Error('Something went wrong');
+export default class RouteWithCustomError extends Route {
+    handle() {
+        throw new Error('route-specific-error');
     }
 
-    handleError(req, res, error) {
-        res.status(500).send({
-            error: 'Route Error',
-            message: error.message,
+    handleError(_req, res, err) {
+        return res.status(409).send({
+            source: 'route-handleError',
+            message: err.message,
         });
     }
 }
 ```
 
-## Plugins
+Use route-level handling when you want endpoint-specific status codes or payload shape.
 
-Oweb supports Fastify plugins and comes with some built-in plugins:
+## SSE (Server-Sent Events)
 
-### Using Fastify Plugins
+If a route returns an iterable or async iterable, Oweb streams it as SSE.
 
-```javascript
-import Oweb from 'owebjs';
-import fastifyMultipart from '@fastify/multipart';
+```js
+import { setTimeout as delay } from 'node:timers/promises';
+import { Route } from 'owebjs';
 
-const app = await new Oweb().setup();
+export default class SseRoute extends Route {
+    async *handle(req, res) {
+        if (req.query?.deny === '1') {
+            return res.status(401).send({ code: 'error.unauthorized' });
+        }
 
-// Register Fastify plugin
-await app.register(fastifyMultipart, {
-    limits: {
-        fileSize: 10 * 1024 * 1024, // 10MB
+        yield 'event-1';
+        await delay(20);
+
+        yield { step: 2 };
+        await delay(20);
+
+        yield 3;
+    }
+}
+```
+
+This is useful for live feeds, progress updates, and long-running operations.
+
+## WebSockets
+
+Create a file that exports a class extending `WebSocketRoute`.
+
+`routes/ws/echo.js` -> `WS /ws/echo`
+
+```js
+import { WebSocketRoute } from 'owebjs';
+
+export default class EchoSocketRoute extends WebSocketRoute {
+    open(ws) {
+        ws.send('ready');
+    }
+
+    message(ws, message, isBinary) {
+        ws.send(message, isBinary);
+    }
+}
+```
+
+Works in both runtime modes:
+
+- Fastify WebSocket adapter (default)
+- Native `uWebSockets.js` mode
+
+## HMR (Hot Module Replacement)
+
+Enable HMR while loading routes:
+
+```js
+await app.loadRoutes({
+    directory: 'routes',
+    matchersDirectory: 'matchers',
+    hmr: {
+        enabled: true,
+        directory: 'routes',
+        matchersDirectory: 'matchers',
     },
 });
 ```
 
-### Using Built-in Plugins
+Notes:
 
-```javascript
+- HMR is disabled in `NODE_ENV=production`
+- Route hook files (`_hooks.js` / `_hooks.ts`) are not hot-reloaded
+- For hook changes, restart the server
+
+## Fastify Plugin Compatibility
+
+Because Oweb sits on Fastify, you can register Fastify plugins directly.
+
+```js
+import multipart from '@fastify/multipart';
+
+await app.register(multipart, {
+    limits: {
+        fileSize: 10 * 1024 * 1024,
+    },
+});
+```
+
+## Built-in Plugin: Chunk Upload
+
+Oweb exposes `ChunkUpload` from `owebjs/plugins` for chunked upload workflows.
+
+```js
 import { Route } from 'owebjs';
-import { ChunkUpload } from 'owebjs/dist/plugins';
+import { ChunkUpload, ChunkUploadStatus } from 'owebjs/plugins';
 
-export default class extends Route {
+export default class ChunkUploadRoute extends Route {
     async handle(req, res) {
         const file = await req.file();
         const buffer = await file.toBuffer();
 
-        await ChunkUpload(
+        const result = await ChunkUpload(
             {
                 buffer,
                 fileName: file.filename,
-                currentChunk: +req.query.currentChunk,
-                totalChunks: +req.query.totalChunks,
+                currentChunk: Number(req.query.currentChunk),
+                totalChunks: Number(req.query.totalChunks),
             },
             {
                 path: './uploads',
-                maxChunkSize: 5 * 1024 * 1024, // 5MB
+                maxChunkSize: 1024 * 1024,
+                maxFileSize: 10 * 1024 * 1024,
             },
         );
 
-        return res.status(204).send();
+        if (
+            result.status === ChunkUploadStatus.ChunkTooLarge ||
+            result.status === ChunkUploadStatus.FileTooLarge
+        ) {
+            return res.status(413).send(result);
+        }
+
+        return res.send(result);
     }
 }
 ```
 
-## Advanced Configuration
+## TypeScript
 
-### uWebSockets.js Support
+Oweb supports `.ts` route files and exports framework typings. You can keep the same file conventions and class model in TypeScript projects.
 
-```javascript
-const app = await new Oweb({ uWebSocketsEnabled: true }).setup();
-```
+## License
 
-### Custom Route Options
-
-```javascript
-import { Route } from 'owebjs';
-
-export default class extends Route {
-    constructor() {
-        super({
-            schema: {
-                body: {
-                    type: 'object',
-                    required: ['username', 'password'],
-                    properties: {
-                        username: { type: 'string' },
-                        password: { type: 'string' },
-                    },
-                },
-            },
-        });
-    }
-
-    async handle(req, res) {
-        // Body is validated according to the schema
-        res.send({ success: true });
-    }
-}
-```
+MIT
