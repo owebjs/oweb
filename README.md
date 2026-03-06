@@ -64,7 +64,7 @@ When to prefer `uWebSocketsEnabled: true`:
 
 ## Benchmark
 
-**Machine**: Ryzen 5 5500, 16GB RAM, 6C/12T, SSD (Base 3.60 GHz, boost ~4.1 GHz observed)
+**Machine**: Windows 11, Ryzen 5 5500, 16GB RAM, 6C/12T, SSD (Base 3.60 GHz, boost ~4.1 GHz observed)
 
 **Method**: `autocannon -c 100 -d 40 -p 10 localhost:3000` \* 2, taking the
 second average
@@ -73,9 +73,11 @@ second average
 | ------------------------- | --------- | -----------: |
 | uWebSockets.js            | 20.52.0   |       79,149 |
 | **Oweb (uWS)**            | 1.5.7-dev |       70,535 |
+| 0http                     | 4.4.0     |       46,605 |
 | Fastify                   | 4.23.2    |       46,238 |
 | **Oweb (Fastify)**        | 1.5.7-dev |       42,570 |
 | Node.js http.createServer | 24.5.0    |       42,544 |
+| Express                   | 5.2.1     |       24,913 |
 
 This is a synthetic "Hello, Word!" benchmark that aims to evaluate the framework overhead.
 The overhead that each framework has on your application depends on your application.
