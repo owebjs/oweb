@@ -15,10 +15,22 @@ import { FastifyWebSocketAdapter } from '../structures/FastifyWebSocketAdapter';
 
 import { formatSSE } from './utils';
 
-const websocketRoutes: Record<string, WebSocketRoute> = {};
 const WS_REGISTRY_KEY = 'ws:registered-routes';
 
-const createMethodMap = (): Record<string, Record<string, Function>> => ({
+type MethodHandlerMap = Record<string, Record<string, Function>>;
+
+type RuntimeState = {
+    matcherOverrides: Record<string, (...args: any[]) => any>;
+    routeFunctions: MethodHandlerMap;
+    temporaryRequests: MethodHandlerMap;
+    routesCache: GeneratedRoute[];
+    compiledRoutes: Record<string, new (...args: any[]) => Route>;
+    websocketRoutes: Record<string, WebSocketRoute>;
+};
+
+const runtimeStates = new WeakMap<Oweb, RuntimeState>();
+
+const createMethodMap = (): MethodHandlerMap => ({
     get: {},
     post: {},
     put: {},
@@ -27,15 +39,27 @@ const createMethodMap = (): Record<string, Record<string, Function>> => ({
     options: {},
 });
 
-let matcherOverrides = {};
+function createRuntimeState(): RuntimeState {
+    return {
+        matcherOverrides: {},
+        routeFunctions: createMethodMap(),
+        temporaryRequests: createMethodMap(),
+        routesCache: [],
+        compiledRoutes: {},
+        websocketRoutes: {},
+    };
+}
 
-let routeFunctions: Record<string, Record<string, Function>> = createMethodMap();
+function getRuntimeState(oweb: Oweb): RuntimeState {
+    let state = runtimeStates.get(oweb);
 
-let temporaryRequests: Record<string, Record<string, Function>> = createMethodMap();
+    if (!state) {
+        state = createRuntimeState();
+        runtimeStates.set(oweb, state);
+    }
 
-let routesCache: GeneratedRoute[] = [];
-
-let compiledRoutes = {};
+    return state;
+}
 
 function normalizeFsPath(filePath: string) {
     return path.resolve(filePath).replaceAll('\\', '/').toLowerCase();
@@ -58,15 +82,14 @@ async function importFreshModule(filePath: string, source?: string) {
 }
 
 function resetRuntimeCaches(oweb: Oweb) {
-    matcherOverrides = {};
-    routeFunctions = createMethodMap();
-    temporaryRequests = createMethodMap();
-    routesCache = [];
-    compiledRoutes = {};
+    const state = getRuntimeState(oweb);
 
-    for (const key of Object.keys(websocketRoutes)) {
-        delete websocketRoutes[key];
-    }
+    state.matcherOverrides = {};
+    state.routeFunctions = createMethodMap();
+    state.temporaryRequests = createMethodMap();
+    state.routesCache = [];
+    state.compiledRoutes = {};
+    state.websocketRoutes = {};
 
     oweb._internalKV.delete(WS_REGISTRY_KEY);
 }
@@ -79,8 +102,8 @@ function removeExtension(filePath: string) {
     return filePath;
 }
 
-function createWebSocketProxy(url: string) {
-    const getHandler = () => websocketRoutes[url];
+function createWebSocketProxy(oweb: Oweb, url: string) {
+    const getHandler = () => getRuntimeState(oweb).websocketRoutes[url];
 
     return {
         compression: getHandler()?._options.compression,
@@ -123,12 +146,13 @@ export const applyMatcherHMR = async (
     filePath: string,
     content: string,
 ) => {
+    const state = getRuntimeState(oweb);
     let def;
 
     const fileName = path.basename(filePath);
 
     if (op === 'delete-file') {
-        delete matcherOverrides[removeExtension(fileName)];
+        delete state.matcherOverrides[removeExtension(fileName)];
         success(`Matcher ${filePath} removed in 0ms`, 'HMR');
         return;
     }
@@ -151,7 +175,7 @@ export const applyMatcherHMR = async (
     }
 
     if (def) {
-        matcherOverrides[removeExtension(fileName)] = def;
+        state.matcherOverrides[removeExtension(fileName)] = def;
     }
 };
 
@@ -164,6 +188,7 @@ export const applyRouteHMR = async (
     path: string,
     content: string,
 ) => {
+    const state = getRuntimeState(oweb);
     const normalizedChangedPath = normalizeFsPath(path);
 
     if (path.endsWith('hooks.js') || path.endsWith('hooks.ts')) {
@@ -176,7 +201,7 @@ export const applyRouteHMR = async (
 
     if (path.endsWith('.ts')) {
         const start = Date.now();
-        compiledRoutes[path] = content.length
+        state.compiledRoutes[path] = content.length
             ? await generateFunctionFromTypescript(content, path)
             : undefined;
         const end = Date.now() - start;
@@ -186,8 +211,8 @@ export const applyRouteHMR = async (
     if (op === 'new-file') {
         const start = Date.now();
         const files = await walk(workingDir, [], fallbackDir);
-        const routes = await generateRoutes(files, path);
-        routesCache = routes;
+        const routes = await generateRoutes(files, path, state.compiledRoutes);
+        state.routesCache = routes;
 
         const f = routes.find(
             (x) => normalizeFsPath(x.fileInfo.filePath) === normalizedChangedPath,
@@ -214,18 +239,18 @@ export const applyRouteHMR = async (
         const method = f.method.toLowerCase();
         const nextHandler = inner(oweb, f);
 
-        if (routeFunctions[method][f.url]) {
-            routeFunctions[method][f.url] = nextHandler;
+        if (state.routeFunctions[method][f.url]) {
+            state.routeFunctions[method][f.url] = nextHandler;
         } else {
-            temporaryRequests[method][f.url] = nextHandler;
+            state.temporaryRequests[method][f.url] = nextHandler;
         }
         const end = Date.now() - start;
         success(`Route ${f.method.toUpperCase()}:${f.url} created in ${end}ms`, 'HMR');
     } else if (op === 'modify-file') {
         const start = Date.now();
         const files = await walk(workingDir, [], fallbackDir);
-        const routes = await generateRoutes(files, path);
-        routesCache = routes;
+        const routes = await generateRoutes(files, path, state.compiledRoutes);
+        state.routesCache = routes;
 
         const f = routes.find(
             (x) => normalizeFsPath(x.fileInfo.filePath) === normalizedChangedPath,
@@ -244,7 +269,7 @@ export const applyRouteHMR = async (
         }
 
         if (f.fn?.prototype instanceof WebSocketRoute) {
-            websocketRoutes[f.url] = new f.fn() as WebSocketRoute;
+            state.websocketRoutes[f.url] = new f.fn() as WebSocketRoute;
 
             const end = Date.now() - start;
             success(`WebSocket Route ${f.url} reloaded in ${end}ms`, 'HMR');
@@ -254,12 +279,12 @@ export const applyRouteHMR = async (
         const method = f.method.toLowerCase();
         const nextHandler = inner(oweb, f);
 
-        if (routeFunctions[method][f.url]) {
-            routeFunctions[method][f.url] = nextHandler;
-        } else if (f.url in temporaryRequests[method]) {
-            temporaryRequests[method][f.url] = nextHandler;
+        if (state.routeFunctions[method][f.url]) {
+            state.routeFunctions[method][f.url] = nextHandler;
+        } else if (f.url in state.temporaryRequests[method]) {
+            state.temporaryRequests[method][f.url] = nextHandler;
         } else {
-            routeFunctions[method][f.url] = nextHandler;
+            state.routeFunctions[method][f.url] = nextHandler;
         }
 
         const end = Date.now() - start;
@@ -273,19 +298,19 @@ export const applyRouteHMR = async (
             builded.url = builded.url.slice(0, -'/index'.length);
         }
 
-        if (websocketRoutes[builded.url]) {
-            delete websocketRoutes[builded.url];
+        if (state.websocketRoutes[builded.url]) {
+            delete state.websocketRoutes[builded.url];
             const end = Date.now() - start;
             success(`WebSocket Route ${builded.url} removed (shimmed) in ${end}ms`, 'HMR');
             return;
         }
 
-        const f = routesCache.find((x) => x.method == builded.method && x.url == builded.url);
+        const f = state.routesCache.find((x) => x.method == builded.method && x.url == builded.url);
         if (f) {
-            if (f.url in temporaryRequests[f.method.toLowerCase()]) {
-                delete temporaryRequests[f.method.toLowerCase()][f.url];
+            if (f.url in state.temporaryRequests[f.method.toLowerCase()]) {
+                delete state.temporaryRequests[f.method.toLowerCase()][f.url];
             } else {
-                delete routeFunctions[f.method.toLowerCase()][f.url];
+                delete state.routeFunctions[f.method.toLowerCase()][f.url];
             }
             const end = Date.now() - start;
             success(`Route ${f.method.toUpperCase()}:${f.url} removed in ${end}ms`, 'HMR');
@@ -304,7 +329,11 @@ type GeneratedRoute = {
     fileInfo: WalkResult;
 };
 
-export const generateRoutes = async (files: WalkResult[], onlyGenerateFn?: string) => {
+export const generateRoutes = async (
+    files: WalkResult[],
+    onlyGenerateFn?: string,
+    compiledRoutes: Record<string, new (...args: any[]) => Route> = {},
+) => {
     const routes: GeneratedRoute[] = [];
 
     for (const file of files) {
@@ -365,13 +394,14 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
     const hasRouteErrorHandler = typeof routeFunc?.handleError === 'function';
 
     const hmrEnabled = !!oweb._internalKV.get('hmr');
+    const state = getRuntimeState(oweb);
 
     const checkMatchers = (req: FastifyRequest) => {
         if (!hasMatchers) return true;
 
         for (const matcher of matchers) {
             const param = req.params[matcher.paramName];
-            const fun = matcherOverrides[matcher.matcherName];
+            const fun = state.matcherOverrides[matcher.matcherName];
             if (fun) {
                 return fun(param);
             }
@@ -588,7 +618,7 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
         if (hmrEnabled && isParametric) {
             const currentPath = req.raw.url.split('?')[0];
             const method = req.method.toLowerCase();
-            const specificHandler = temporaryRequests[method]?.[currentPath];
+            const specificHandler = state.temporaryRequests[method]?.[currentPath];
 
             if (specificHandler) {
                 return specificHandler(req, res);
@@ -629,10 +659,11 @@ function getRegisteredWebSocketsForApp(oweb: Oweb): Set<string> {
 
 function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
     if (!route?.fn) return;
+    const state = getRuntimeState(oweb);
 
     if (route?.fn?.prototype instanceof WebSocketRoute) {
         const wsInstance = new route.fn() as WebSocketRoute;
-        websocketRoutes[route.url] = wsInstance;
+        state.websocketRoutes[route.url] = wsInstance;
 
         const registeredWebSockets = getRegisteredWebSocketsForApp(oweb);
 
@@ -640,7 +671,7 @@ function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
             registeredWebSockets.add(route.url);
 
             if (oweb._options.uWebSocketsEnabled && oweb.uServer) {
-                const proxy = createWebSocketProxy(route.url);
+                const proxy = createWebSocketProxy(oweb, route.url);
                 oweb.ws(route.url, proxy, route.fileInfo.hooks);
             } else {
                 oweb.get(route.url, { websocket: true }, (arg1: any, arg2: any) => {
@@ -718,7 +749,7 @@ function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
                             return;
                         }
 
-                        const getHandler = () => websocketRoutes[route.url];
+                        const getHandler = () => state.websocketRoutes[route.url];
 
                         socket.on('message', (message: any, isBinary: boolean) => {
                             const h = getHandler();
@@ -768,17 +799,17 @@ function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
     const hmrEnabled = !!oweb._internalKV.get('hmr');
 
     if (hmrEnabled) {
-        routeFunctions[route.method][route.url] = routeHandler;
+        state.routeFunctions[route.method][route.url] = routeHandler;
 
         oweb[route.method](
             route.url,
             routeFunc._options || {},
             function (req: FastifyRequest, res: FastifyReply) {
-                if (routeFunctions[route.method][route.url]) {
-                    return routeFunctions[route.method][route.url](req, res);
+                if (state.routeFunctions[route.method][route.url]) {
+                    return state.routeFunctions[route.method][route.url](req, res);
                 } else {
                     // if file was present but later renamed at HMR, this will be useful
-                    const vals = temporaryRequests[route.method];
+                    const vals = state.temporaryRequests[route.method];
                     const keys = Object.keys(vals);
 
                     if (!vals || !keys.length) {
@@ -805,7 +836,7 @@ function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
     oweb[route.method](route.url, routeFunc._options || {}, routeHandler as any);
 }
 
-async function loadMatchers(directoryPath: string) {
+async function loadMatchers(directoryPath: string, state: RuntimeState) {
     const files = readdirSync(directoryPath).filter((f) =>
         ['.js', '.ts'].includes(path.extname(f)),
     );
@@ -819,24 +850,25 @@ async function loadMatchers(directoryPath: string) {
 
         const def = await import(packageURL);
 
-        matcherOverrides[removeExtension(fileName)] = def.default;
+        state.matcherOverrides[removeExtension(fileName)] = def.default;
     }
 }
 
 export const assignRoutes = async (oweb: Oweb, directory: string, matchersDirectory?: string) => {
     resetRuntimeCaches(oweb);
+    const state = getRuntimeState(oweb);
 
     if (matchersDirectory) {
-        await loadMatchers(matchersDirectory);
+        await loadMatchers(matchersDirectory, state);
     }
 
     const files = await walk(directory);
-    const routes = await generateRoutes(files);
+    const routes = await generateRoutes(files, undefined, state.compiledRoutes);
 
-    routesCache = routes;
+    state.routesCache = routes;
 
     function fallbackHandle(req: FastifyRequest, res: FastifyReply) {
-        const vals = temporaryRequests[req.method.toLowerCase()];
+        const vals = state.temporaryRequests[req.method.toLowerCase()];
         const keys = Object.keys(vals);
 
         if (!vals || !keys.length) {
