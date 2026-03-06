@@ -77,6 +77,10 @@ second average
 | Oweb (Fastify)            | 1.5.7-dev |       42,570 |
 | Node.js http.createServer | 24.5.0    |       42,544 |
 
+This is a synthetic "Hello, Word!" benchmark that aims to evaluate the framework overhead.
+The overhead that each framework has on your application depends on your application.
+You should always benchmark if performance matters to you.
+
 ## First App (2 Minutes)
 
 Start with a minimal app, then we will add route conventions step by step.
