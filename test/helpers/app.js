@@ -37,7 +37,17 @@ export async function createTestApp({
     hmr = false,
     internalErrorHandler,
 } = {}) {
-    const app = await new Oweb({ uWebSocketsEnabled }).setup();
+    const app = await new Oweb({
+        uWebSocketsEnabled,
+        staticResponseHeaders: {
+            'x-content-type-options': 'nosniff',
+            'x-test-header': 'test-value',
+            'access-control-allow-origin': '*',
+            'access-control-allow-headers': 'Content-Type, Authorization',
+            'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+        },
+        autoPreflight: true,
+    }).setup();
 
     if (registerMultipart) {
         await app.register(multipart, {

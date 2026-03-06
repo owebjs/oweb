@@ -9,10 +9,14 @@ export default async function ({
     cert_file_name,
     key_file_name,
     staticResponseHeaders,
+    autoPreflight,
+    poweredByHeader,
 }: {
     cert_file_name?: string;
     key_file_name?: string;
     staticResponseHeaders?: Record<string, string>;
+    autoPreflight?: boolean;
+    poweredByHeader?: boolean;
 }) {
     let uWS;
     uWS = (await import('uWebSockets.js')).default;
@@ -50,6 +54,35 @@ export default async function ({
         const query = req.getQuery();
         const url = req.getUrl();
         const requiresBody = method !== 'HEAD' && method !== 'GET';
+        if (autoPreflight && method === 'OPTIONS') {
+            res.writeStatus('204 No Content');
+
+            let hasPoweredByHeader = false;
+
+            if (normalizedStaticHeaders?.length) {
+                for (let i = 0; i < normalizedStaticHeaders.length; i++) {
+                    const [key, value] = normalizedStaticHeaders[i];
+
+                    if (key === 'content-length' || key === 'transfer-encoding') {
+                        continue;
+                    }
+
+                    if (key === 'x-powered-by') {
+                        hasPoweredByHeader = true;
+                    }
+
+                    res.writeHeader(key, value);
+                }
+            }
+
+            if (poweredByHeader && !hasPoweredByHeader) {
+                res.writeHeader('x-powered-by', 'Oweb');
+            }
+
+            res.end();
+            return;
+        }
+
 
         res.finished = false;
         res.aborted = false;
@@ -359,5 +392,6 @@ export default async function ({
 
     return initUServer;
 }
+
 
 

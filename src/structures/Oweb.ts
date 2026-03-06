@@ -18,6 +18,7 @@ const HMR_WATCHERS_KEY = 'hmr:watchers';
 export interface OwebOptions extends FastifyServerOptions {
     uWebSocketsEnabled?: boolean;
     poweredByHeader?: boolean;
+    autoPreflight?: boolean;
     staticResponseHeaders?: Record<string, string>;
     OWEB_INTERNAL_ERROR_HANDLER?: Function;
 }
@@ -59,6 +60,7 @@ export class Oweb extends _FastifyInstance {
 
         this._options.uWebSocketsEnabled ??= false;
         this._options.poweredByHeader ??= true;
+        this._options.autoPreflight ??= false;
         this._options.OWEB_INTERNAL_ERROR_HANDLER ??= (
             _: FastifyRequest,
             res: FastifyReply,
@@ -103,6 +105,8 @@ export class Oweb extends _FastifyInstance {
             const serverimp = (await import('../uwebsocket/server.js')).default;
             const server = await serverimp({
                 staticResponseHeaders: this._options.staticResponseHeaders,
+                autoPreflight: this._options.autoPreflight,
+                poweredByHeader: this._options.poweredByHeader,
             });
 
             this.uServer = server;
@@ -145,6 +149,12 @@ export class Oweb extends _FastifyInstance {
             fastify.addHook('onRequest', (_, res, done) => {
                 res.header('X-Powered-By', 'Oweb');
                 done();
+            });
+        }
+
+        if (this._options.autoPreflight && !this._options.uWebSocketsEnabled) {
+            fastify.options('/*', (_req, res) => {
+                return res.status(204).send();
             });
         }
 

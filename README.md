@@ -99,6 +99,7 @@ import Oweb from 'owebjs';
 const app = await new Oweb({
     uWebSocketsEnabled: true,
     poweredByHeader: false,
+    autoPreflight: true,
     staticResponseHeaders: {
         // CORS (set your real origin in production)
         'access-control-allow-origin': 'https://yourdomain.com',
@@ -125,6 +126,28 @@ await app.loadRoutes({
 
 await app.start({ port: 3000, host: '0.0.0.0' });
 ```
+
+## CORS Configuration
+
+Use `autoPreflight` to return `204` for preflight requests and set CORS headers through `staticResponseHeaders`.
+
+```js
+import Oweb from 'owebjs';
+
+const app = await new Oweb({
+    uWebSocketsEnabled: true,
+    autoPreflight: true,
+    poweredByHeader: false,
+    staticResponseHeaders: {
+        'access-control-allow-origin': 'https://yourdomain.com',
+        'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+        'access-control-allow-headers': 'Content-Type, Authorization',
+        vary: 'Origin',
+    },
+}).setup();
+```
+
+If you need credentials, do not use `*` for `access-control-allow-origin`; set an explicit origin.
 
 ## First App (2 Minutes)
 
