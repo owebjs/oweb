@@ -69,13 +69,13 @@ When to prefer `uWebSocketsEnabled: true`:
 **Method**: `autocannon -c 100 -d 40 -p 10 localhost:3000` \* 2, taking the
 second average
 
-| Runtime                   | Version   |    RPS |
-| ------------------------- | --------- | -----: |
-| uWebSockets.js            | 20.52.0   | 79,149 |
-| Oweb (uWS)                | 1.5.7-dev | 70,535 |
-| Fastify                   | 4.23.2    | 46,238 |
-| Oweb (Fastify)            | 1.5.7-dev | 42,570 |
-| Node.js http.createServer | 24.5.0    | 42,544 |
+| Runtime                   | Version   | Requests/sec |
+| ------------------------- | --------- | -----------: |
+| uWebSockets.js            | 20.52.0   |       79,149 |
+| Oweb (uWS)                | 1.5.7-dev |       70,535 |
+| Fastify                   | 4.23.2    |       46,238 |
+| Oweb (Fastify)            | 1.5.7-dev |       42,570 |
+| Node.js http.createServer | 24.5.0    |       42,544 |
 
 ## First App (2 Minutes)
 
