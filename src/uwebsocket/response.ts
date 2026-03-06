@@ -11,8 +11,8 @@ export default class HttpResponse extends Writable {
     statusMessage;
     __headers;
     headersSent;
-    socket;
     finished;
+    private _socket: any = null;
 
     constructor(uResponse, uServer) {
         super();
@@ -24,16 +24,23 @@ export default class HttpResponse extends Writable {
         this.statusMessage = null;
         this.__headers = {};
         this.headersSent = false;
+        this.finished = false;
+    }
 
-        this.socket = new HttpResponseSocket(uResponse);
+    public get socket() {
+        if (!this._socket) {
+            this._socket = new HttpResponseSocket(this.res);
+        }
 
-        this.res.onAborted(() => {
-            this.finished = this.res.finished = true;
-        });
+        return this._socket;
+    }
+
+    private isClosed() {
+        return this.finished || this.res.aborted || this.res.finished;
     }
 
     public get sent() {
-        return this.finished;
+        return this.isClosed();
     }
 
     setHeader(name, value) {
@@ -62,7 +69,7 @@ export default class HttpResponse extends Writable {
     }
 
     _flushHeaders() {
-        if (this.headersSent) return;
+        if (this.headersSent || this.isClosed()) return;
 
         const message = this.statusMessage || http.STATUS_CODES[this.statusCode] || 'Unknown';
         this.res.writeStatus(`${this.statusCode} ${message}`);
@@ -91,16 +98,18 @@ export default class HttpResponse extends Writable {
 
     //@ts-ignore
     write(data) {
-        if (this.finished) return;
+        if (this.isClosed()) return;
 
         this.res.cork(() => {
             this._flushHeaders();
-            this.res.write(data);
+            if (!this.isClosed()) {
+                this.res.write(data);
+            }
         });
     }
 
     writeHead(statusCode) {
-        if (this.finished) return;
+        if (this.isClosed()) return;
 
         this.statusCode = statusCode;
         let headers;
@@ -119,7 +128,7 @@ export default class HttpResponse extends Writable {
 
     //@ts-ignore
     end(data) {
-        if (this.finished) return;
+        if (this.isClosed()) return;
 
         this.res.cork(() => {
             this._flushHeaders();

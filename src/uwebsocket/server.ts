@@ -40,36 +40,42 @@ export default async function ({
     };
 
     const uServer = uWS[appType](config).any('/*', (res, req) => {
+        const method = req.getMethod().toUpperCase();
+        const query = req.getQuery();
+        const url = req.getUrl();
+        const requiresBody = method !== 'HEAD' && method !== 'GET';
+
         res.finished = false;
         res.aborted = false;
-        res.isPaused = false;
+
+        if (requiresBody) {
+            res.isPaused = false;
+        }
 
         res.onAborted(() => {
             res.aborted = true;
             res.finished = true;
         });
 
-        const reqWrapper = new HttpRequest(req, res);
+        const reqWrapper = new HttpRequest(req, res, { method, query, url });
         const resWrapper = new HttpResponse(res, uServer);
 
         reqWrapper.res = resWrapper;
         resWrapper.req = reqWrapper;
-        reqWrapper.socket = resWrapper.socket;
-
-        const originalResume = res.resume;
-        res.resume = function () {
-            if (res.isPaused && !res.finished && !res.aborted) {
-                res.isPaused = false;
-                originalResume.call(res);
-            }
-        };
+        reqWrapper.bindSocketFactory(() => resWrapper.socket);
 
         handler(reqWrapper, resWrapper);
 
-        const method = reqWrapper.method;
-
         // also check for finished state so that the 404 handler doesnt crap itself
-        if (method !== 'HEAD' && method !== 'GET' && !resWrapper.finished) {
+        if (requiresBody && !resWrapper.finished) {
+            const originalResume = res.resume;
+            res.resume = function () {
+                if (res.isPaused && !res.finished && !res.aborted) {
+                    res.isPaused = false;
+                    originalResume.call(res);
+                }
+            };
+
             res.onData((bytes, isLast) => {
                 if (res.finished || res.aborted || reqWrapper.destroyed) return;
 
@@ -347,3 +353,4 @@ export default async function ({
 
     return initUServer;
 }
+

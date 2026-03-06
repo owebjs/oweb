@@ -17,6 +17,7 @@ const HMR_WATCHERS_KEY = 'hmr:watchers';
 
 export interface OwebOptions extends FastifyServerOptions {
     uWebSocketsEnabled?: boolean;
+    poweredByHeader?: boolean;
     OWEB_INTERNAL_ERROR_HANDLER?: Function;
 }
 
@@ -56,6 +57,7 @@ export class Oweb extends _FastifyInstance {
         this._options = options ?? {};
 
         this._options.uWebSocketsEnabled ??= false;
+        this._options.poweredByHeader ??= true;
         this._options.OWEB_INTERNAL_ERROR_HANDLER ??= (
             _: FastifyRequest,
             res: FastifyReply,
@@ -116,10 +118,12 @@ export class Oweb extends _FastifyInstance {
             await fastify.register(websocketPlugin);
         }
 
-        fastify.addHook('onRequest', (_, res, done) => {
-            res.header('X-Powered-By', 'Oweb');
-            done();
-        });
+        if (this._options.poweredByHeader) {
+            fastify.addHook('onRequest', (_, res, done) => {
+                res.header('X-Powered-By', 'Oweb');
+                done();
+            });
+        }
 
         const internalKV = this._internalKV;
         fastify.addHook('onClose', async () => {
@@ -273,3 +277,4 @@ export class Oweb extends _FastifyInstance {
         });
     }
 }
+

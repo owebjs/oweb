@@ -355,215 +355,256 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
 
     const routeFunc = new route.fn();
     const matchers = route.matchers;
+    const hooks = route.fileInfo.hooks;
 
+    const hasHooks = hooks.length > 0;
+    const hasMatchers = matchers.length > 0;
     const isParametric = route.url.includes(':') || route.url.includes('*');
 
-    return function (req: FastifyRequest, res: FastifyReply) {
-        if (oweb._internalKV.get('hmr') && isParametric) {
-            const currentPath = req.raw.url.split('?')[0];
+    const handleIsAsync = routeFunc.handle.constructor.name === 'AsyncFunction';
+    const hasRouteErrorHandler = typeof routeFunc?.handleError === 'function';
 
-            const method = req.method.toLowerCase();
+    const hmrEnabled = !!oweb._internalKV.get('hmr');
 
-            const specificHandler = temporaryRequests[method]?.[currentPath];
+    const checkMatchers = (req: FastifyRequest) => {
+        if (!hasMatchers) return true;
 
-            if (specificHandler && specificHandler !== temporaryRequests[route.method][route.url]) {
-                return specificHandler(req, res);
+        for (const matcher of matchers) {
+            const param = req.params[matcher.paramName];
+            const fun = matcherOverrides[matcher.matcherName];
+            if (fun) {
+                return fun(param);
             }
         }
 
-        const checkMatchers = () => {
-            for (const matcher of matchers) {
-                const param = req.params[matcher.paramName];
-                const fun = matcherOverrides[matcher.matcherName];
-                if (fun) {
-                    return fun(param);
-                }
-            }
-            return true;
+        return true;
+    };
+
+    const handleError = (req: FastifyRequest, res: FastifyReply, err: unknown) => {
+        const normalizedError = err instanceof Error ? err : new Error(String(err));
+
+        if (hasRouteErrorHandler) {
+            routeFunc.handleError!(req, res, normalizedError);
+        } else {
+            oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, normalizedError);
+        }
+    };
+
+    const streamResult = async (
+        req: FastifyRequest,
+        res: FastifyReply,
+        result: any,
+        isAsyncIterable: boolean,
+    ) => {
+        // we don't send headers yet. we must pull the first chunk to see
+        // if the user executes .send instead of yielding
+
+        const iterator = isAsyncIterable
+            ? result[Symbol.asyncIterator]()
+            : result[Symbol.iterator]();
+
+        let firstChunk;
+
+        try {
+            firstChunk = await iterator.next();
+        } catch (err) {
+            // if occurs before the first yield
+            handleError(req, res, err);
+            return;
+        }
+
+        if (res.sent) return;
+
+        if (firstChunk.done) {
+            if (firstChunk.value !== undefined) res.send(firstChunk.value);
+            return;
+        }
+
+        const rawObj = res.raw as any;
+        const uwsRes = rawObj.res && typeof rawObj.res.cork === 'function' ? rawObj.res : null;
+
+        const corkedOp = (op: () => void) => {
+            if (uwsRes) uwsRes.cork(op);
+            else op();
         };
 
-        const handle = async () => {
-            let result;
+        corkedOp(() => {
+            const headers = {
+                ...res.getHeaders(),
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                Connection: 'keep-alive',
+            };
+            res.raw.writeHead(200, headers);
+            if (res.raw.flushHeaders) res.raw.flushHeaders();
+        });
 
-            try {
-                if (routeFunc.handle.constructor.name === 'AsyncFunction') {
-                    result = await routeFunc.handle(req, res);
-                } else {
-                    result = routeFunc.handle(req, res);
-                    if (result instanceof Promise) {
-                        result = await result;
-                    }
-                }
-            } catch (error) {
-                if (routeFunc?.handleError) {
-                    routeFunc.handleError(req, res, error);
-                } else {
-                    oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, error);
-                }
+        let aborted = false;
+
+        const onAborted = () => {
+            aborted = true;
+        };
+
+        if (res.raw.on) {
+            res.raw.on('close', onAborted);
+            res.raw.on('aborted', onAborted);
+        } else if (rawObj['onAborted']) {
+            rawObj['onAborted'](onAborted);
+        }
+
+        try {
+            corkedOp(() => {
+                res.raw.write(formatSSE(firstChunk.value));
+            });
+
+            while (true) {
+                if (aborted || res.raw.destroyed) break;
+                const chunk = await iterator.next();
+
+                if (chunk.done) break;
+
+                corkedOp(() => {
+                    res.raw.write(formatSSE(chunk.value));
+                });
+            }
+        } catch (err: any) {
+            error(
+                'Error while streaming response for ' +
+                    route.method.toUpperCase() +
+                    ':' +
+                    route.url +
+                    ' - ' +
+                    err.message,
+                'SSE',
+            );
+        } finally {
+            if (res.raw.off) {
+                res.raw.off('close', onAborted);
+                res.raw.off('aborted', onAborted);
+            }
+
+            if (!aborted && !res.raw.destroyed) {
+                corkedOp(() => {
+                    res.raw.end();
+                });
+            }
+        }
+    };
+
+    const finalizeResult = (req: FastifyRequest, res: FastifyReply, result: any) => {
+        if (res.sent) return;
+
+        const isIterable = result && typeof result[Symbol.iterator] === 'function';
+        const isAsyncIterable = result && typeof result[Symbol.asyncIterator] === 'function';
+
+        if (isIterable || isAsyncIterable) {
+            streamResult(req, res, result, isAsyncIterable);
+            return;
+        }
+
+        if (!res.sent && result !== undefined) {
+            res.send(result);
+        }
+    };
+
+    const executeRoute = handleIsAsync
+        ? async (req: FastifyRequest, res: FastifyReply) => {
+              try {
+                  const result = await routeFunc.handle(req, res);
+                  finalizeResult(req, res, result);
+              } catch (error) {
+                  handleError(req, res, error);
+              }
+          }
+        : (req: FastifyRequest, res: FastifyReply) => {
+              let result;
+
+              try {
+                  result = routeFunc.handle(req, res);
+              } catch (error) {
+                  handleError(req, res, error);
+                  return;
+              }
+
+              if (result instanceof Promise) {
+                  result
+                      .then((resolved) => {
+                          finalizeResult(req, res, resolved);
+                      })
+                      .catch((error) => {
+                          handleError(req, res, error);
+                      });
+                  return;
+              }
+
+              finalizeResult(req, res, result);
+          };
+
+    const isSimpleRoute = !hmrEnabled && !hasHooks && !hasMatchers && !isParametric;
+
+    if (isSimpleRoute) {
+        return function (req: FastifyRequest, res: FastifyReply) {
+            executeRoute(req, res);
+        };
+    }
+
+    const runHooks = (req: FastifyRequest, res: FastifyReply) => {
+        let hookIndex = 0;
+
+        const runNextHook = (hookErr?: unknown) => {
+            if (hookErr) {
+                handleError(req, res, hookErr);
                 return;
             }
 
             if (res.sent) return;
 
-            const isIterable = result && typeof result[Symbol.iterator] === 'function';
-            const isAsyncIterable = result && typeof result[Symbol.asyncIterator] === 'function';
-
-            if (isIterable || isAsyncIterable) {
-                // we don't send headers yet. we must pull the first chunk to see
-                // if the user executes .send instead of yielding
-
-                const iterator = isAsyncIterable
-                    ? result[Symbol.asyncIterator]()
-                    : result[Symbol.iterator]();
-
-                let firstChunk;
-
-                try {
-                    firstChunk = await iterator.next();
-                } catch (err) {
-                    // if occurs before the first yield
-                    if (routeFunc?.handleError) routeFunc.handleError(req, res, err);
-                    else oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, err);
-                    return;
-                }
-
-                if (res.sent) return;
-
-                if (firstChunk.done) {
-                    if (firstChunk.value !== undefined) res.send(firstChunk.value);
-                    return;
-                }
-
-                const rawObj = res.raw as any;
-                const uwsRes =
-                    rawObj.res && typeof rawObj.res.cork === 'function' ? rawObj.res : null;
-
-                const corkedOp = (op: () => void) => {
-                    if (uwsRes) uwsRes.cork(op);
-                    else op();
-                };
-
-                corkedOp(() => {
-                    const headers = {
-                        ...res.getHeaders(),
-                        'Content-Type': 'text/event-stream',
-                        'Cache-Control': 'no-cache',
-                        Connection: 'keep-alive',
-                    };
-                    res.raw.writeHead(200, headers);
-                    if (res.raw.flushHeaders) res.raw.flushHeaders();
-                });
-
-                let aborted = false;
-
-                const onAborted = () => {
-                    aborted = true;
-                };
-
-                if (res.raw.on) {
-                    res.raw.on('close', onAborted);
-                    res.raw.on('aborted', onAborted);
-                } else if (rawObj['onAborted']) {
-                    rawObj['onAborted'](onAborted);
-                }
-
-                try {
-                    corkedOp(() => {
-                        res.raw.write(formatSSE(firstChunk.value));
-                    });
-
-                    while (true) {
-                        if (aborted || res.raw.destroyed) break;
-                        const chunk = await iterator.next();
-
-                        if (chunk.done) break;
-
-                        corkedOp(() => {
-                            res.raw.write(formatSSE(chunk.value));
-                        });
-                    }
-                } catch (err) {
-                    error(
-                        `Error while streaming response for ${route.method.toUpperCase()}:${route.url} - ${err.message}`,
-                        'SSE',
-                    );
-                } finally {
-                    if (res.raw.off) {
-                        res.raw.off('close', onAborted);
-                        res.raw.off('aborted', onAborted);
-                    }
-
-                    if (!aborted && !res.raw.destroyed) {
-                        corkedOp(() => {
-                            res.raw.end();
-                        });
-                    }
-                }
+            if (hookIndex >= hooks.length) {
+                executeRoute(req, res);
                 return;
             }
 
-            if (!res.sent && result !== undefined) {
-                res.send(result);
+            const hookFun = hooks[hookIndex++];
+            const hookInstance = typeof hookFun === 'function' ? new (hookFun as any)() : hookFun;
+
+            let doneCalled = false;
+            const done = (doneErr?: unknown) => {
+                if (doneCalled) return;
+                doneCalled = true;
+                runNextHook(doneErr);
+            };
+
+            try {
+                hookInstance.handle(req, res, done);
+            } catch (err) {
+                done(err);
             }
         };
-        //assign hooks if exists
-        if (route.fileInfo.hooks.length) {
-            let hookIndex = 0;
 
-            const failWithHookError = (hookErr: unknown) => {
-                const normalizedError =
-                    hookErr instanceof Error ? hookErr : new Error(String(hookErr));
+        runNextHook();
+    };
 
-                if (routeFunc?.handleError) {
-                    routeFunc.handleError(req, res, normalizedError);
-                } else {
-                    oweb._options.OWEB_INTERNAL_ERROR_HANDLER(req, res, normalizedError);
-                }
-            };
+    return function (req: FastifyRequest, res: FastifyReply) {
+        if (hmrEnabled && isParametric) {
+            const currentPath = req.raw.url.split('?')[0];
+            const method = req.method.toLowerCase();
+            const specificHandler = temporaryRequests[method]?.[currentPath];
 
-            const runNextHook = (hookErr?: unknown) => {
-                if (hookErr) {
-                    failWithHookError(hookErr);
-                    return;
-                }
-
-                if (res.sent) return;
-
-                if (hookIndex >= route.fileInfo.hooks.length) {
-                    if (!checkMatchers()) {
-                        send404(req, res);
-                    } else {
-                        handle();
-                    }
-                    return;
-                }
-
-                const hookFun = route.fileInfo.hooks[hookIndex++];
-                const hookInstance =
-                    typeof hookFun === 'function' ? new (hookFun as any)() : hookFun;
-
-                let doneCalled = false;
-                const done = (doneErr?: unknown) => {
-                    if (doneCalled) return;
-                    doneCalled = true;
-                    runNextHook(doneErr);
-                };
-
-                try {
-                    hookInstance.handle(req, res, done);
-                } catch (err) {
-                    done(err);
-                }
-            };
-
-            runNextHook();
-        } else {
-            if (!checkMatchers()) {
-                send404(req, res);
-            } else {
-                handle();
+            if (specificHandler) {
+                return specificHandler(req, res);
             }
         }
+
+        if (!checkMatchers(req)) {
+            return send404(req, res);
+        }
+
+        if (!hasHooks) {
+            executeRoute(req, res);
+            return;
+        }
+
+        runHooks(req, res);
     };
 }
 
@@ -720,37 +761,48 @@ function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
     }
 
     const routeFunc = new route.fn();
+    const routeHandler = inner(oweb, route);
 
-    routeFunctions[route.method][route.url] = inner(oweb, route);
+    if (!routeHandler) return;
 
-    oweb[route.method](
-        route.url,
-        routeFunc._options || {},
-        function (req: FastifyRequest, res: FastifyReply) {
-            if (routeFunctions[route.method][route.url]) {
-                return routeFunctions[route.method][route.url](req, res);
-            } else {
-                // if file was present but later renamed at HMR, this will be useful
-                const vals = temporaryRequests[route.method];
-                const keys = Object.keys(vals);
+    const hmrEnabled = !!oweb._internalKV.get('hmr');
 
-                if (!vals || !keys.length) {
-                    return send404(req, res);
-                }
+    if (hmrEnabled) {
+        routeFunctions[route.method][route.url] = routeHandler;
 
-                const f = keys.find((tempName) => {
-                    const matcher = match(tempName);
-                    return matcher(req.url);
-                });
-
-                if (f && vals[f]) {
-                    return vals[f](req, res);
+        oweb[route.method](
+            route.url,
+            routeFunc._options || {},
+            function (req: FastifyRequest, res: FastifyReply) {
+                if (routeFunctions[route.method][route.url]) {
+                    return routeFunctions[route.method][route.url](req, res);
                 } else {
-                    return send404(req, res);
+                    // if file was present but later renamed at HMR, this will be useful
+                    const vals = temporaryRequests[route.method];
+                    const keys = Object.keys(vals);
+
+                    if (!vals || !keys.length) {
+                        return send404(req, res);
+                    }
+
+                    const f = keys.find((tempName) => {
+                        const matcher = match(tempName);
+                        return matcher(req.url);
+                    });
+
+                    if (f && vals[f]) {
+                        return vals[f](req, res);
+                    } else {
+                        return send404(req, res);
+                    }
                 }
-            }
-        },
-    );
+            },
+        );
+
+        return;
+    }
+
+    oweb[route.method](route.url, routeFunc._options || {}, routeHandler as any);
 }
 
 async function loadMatchers(directoryPath: string) {
@@ -803,8 +855,10 @@ export const assignRoutes = async (oweb: Oweb, directory: string, matchersDirect
         }
     }
 
-    for (const element of ['get', 'post', 'put', 'patch', 'delete']) {
-        oweb[element]('*', fallbackHandle);
+    if (oweb._internalKV.get('hmr')) {
+        for (const element of ['get', 'post', 'put', 'patch', 'delete']) {
+            oweb[element]('*', fallbackHandle);
+        }
     }
 
     for (const route of routes) {
