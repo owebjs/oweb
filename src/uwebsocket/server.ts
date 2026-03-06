@@ -8,9 +8,11 @@ import http from 'node:http';
 export default async function ({
     cert_file_name,
     key_file_name,
+    staticResponseHeaders,
 }: {
     cert_file_name?: string;
     key_file_name?: string;
+    staticResponseHeaders?: Record<string, string>;
 }) {
     let uWS;
     uWS = (await import('uWebSockets.js')).default;
@@ -31,6 +33,10 @@ export default async function ({
         cert_file_name,
         key_file_name,
     };
+
+    const normalizedStaticHeaders: [string, string][] | undefined = staticResponseHeaders
+        ? Object.entries(staticResponseHeaders).map(([k, v]) => [k.toLowerCase(), String(v)])
+        : undefined;
 
     const copyArrayBufferToBuffer = (bytes: ArrayBuffer): Buffer => {
         const src = new Uint8Array(bytes);
@@ -58,7 +64,7 @@ export default async function ({
         });
 
         const reqWrapper = new HttpRequest(req, res, { method, query, url });
-        const resWrapper = new HttpResponse(res, uServer);
+        const resWrapper = new HttpResponse(res, uServer, normalizedStaticHeaders);
 
         reqWrapper.res = resWrapper;
         resWrapper.req = reqWrapper;
@@ -353,4 +359,5 @@ export default async function ({
 
     return initUServer;
 }
+
 

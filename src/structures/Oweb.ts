@@ -18,6 +18,7 @@ const HMR_WATCHERS_KEY = 'hmr:watchers';
 export interface OwebOptions extends FastifyServerOptions {
     uWebSocketsEnabled?: boolean;
     poweredByHeader?: boolean;
+    staticResponseHeaders?: Record<string, string>;
     OWEB_INTERNAL_ERROR_HANDLER?: Function;
 }
 
@@ -100,7 +101,9 @@ export class Oweb extends _FastifyInstance {
     public async setup(): Promise<Oweb> {
         if (this._options.uWebSocketsEnabled) {
             const serverimp = (await import('../uwebsocket/server.js')).default;
-            const server = await serverimp({});
+            const server = await serverimp({
+                staticResponseHeaders: this._options.staticResponseHeaders,
+            });
 
             this.uServer = server;
 
@@ -118,7 +121,27 @@ export class Oweb extends _FastifyInstance {
             await fastify.register(websocketPlugin);
         }
 
-        if (this._options.poweredByHeader) {
+        const staticHeaderEntries = this._options.staticResponseHeaders
+            ? Object.entries(this._options.staticResponseHeaders)
+            : [];
+
+        if (
+            !this._options.uWebSocketsEnabled &&
+            (this._options.poweredByHeader || staticHeaderEntries.length)
+        ) {
+            fastify.addHook('onRequest', (_, res, done) => {
+                if (this._options.poweredByHeader) {
+                    res.header('X-Powered-By', 'Oweb');
+                }
+
+                for (let i = 0; i < staticHeaderEntries.length; i++) {
+                    const [key, value] = staticHeaderEntries[i];
+                    res.header(key, value as any);
+                }
+
+                done();
+            });
+        } else if (this._options.poweredByHeader) {
             fastify.addHook('onRequest', (_, res, done) => {
                 res.header('X-Powered-By', 'Oweb');
                 done();
@@ -231,16 +254,20 @@ export class Oweb extends _FastifyInstance {
         watchers.push(routeWatcher);
 
         if (this.hmrMatchersDirectory) {
-            const matcherWatcher = watchDirectory(this.hmrMatchersDirectory, true, (op, path, content) => {
-                applyMatcherHMR(
-                    this,
-                    op,
-                    this.hmrMatchersDirectory,
-                    this.matchersDirectory,
-                    path,
-                    content,
-                );
-            });
+            const matcherWatcher = watchDirectory(
+                this.hmrMatchersDirectory,
+                true,
+                (op, path, content) => {
+                    applyMatcherHMR(
+                        this,
+                        op,
+                        this.hmrMatchersDirectory,
+                        this.matchersDirectory,
+                        path,
+                        content,
+                    );
+                },
+            );
 
             watchers.push(matcherWatcher);
         }
@@ -277,4 +304,3 @@ export class Oweb extends _FastifyInstance {
         });
     }
 }
-

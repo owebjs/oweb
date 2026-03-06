@@ -12,9 +12,10 @@ export default class HttpResponse extends Writable {
     __headers;
     headersSent;
     finished;
+    staticHeaders?: [string, string][];
     private _socket: any = null;
 
-    constructor(uResponse, uServer) {
+    constructor(uResponse, uServer, staticHeaders?: [string, string][]) {
         super();
 
         this.res = uResponse;
@@ -25,6 +26,7 @@ export default class HttpResponse extends Writable {
         this.__headers = {};
         this.headersSent = false;
         this.finished = false;
+        this.staticHeaders = staticHeaders;
     }
 
     public get socket() {
@@ -73,6 +75,22 @@ export default class HttpResponse extends Writable {
 
         const message = this.statusMessage || http.STATUS_CODES[this.statusCode] || 'Unknown';
         this.res.writeStatus(`${this.statusCode} ${message}`);
+
+        if (this.staticHeaders?.length) {
+            for (let i = 0; i < this.staticHeaders.length; i++) {
+                const [key, value] = this.staticHeaders[i];
+
+                if (key === 'content-length' || key === 'transfer-encoding') {
+                    continue;
+                }
+
+                if (this.__headers[key] !== undefined) {
+                    continue;
+                }
+
+                this.res.writeHeader(key, value);
+            }
+        }
 
         const keys = Object.keys(this.__headers);
         for (let i = 0; i < keys.length; i++) {
