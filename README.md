@@ -72,16 +72,59 @@ second average
 | Runtime                   | Version   | Requests/sec |
 | ------------------------- | --------- | -----------: |
 | uWebSockets.js            | 20.52.0   |       79,149 |
-| **Oweb (uWS)**            | 1.5.7-dev |       70,535 |
+| **Oweb (uWS)**            | 1.5.8-dev |       76,853 |
 | 0http                     | 4.4.0     |       46,605 |
 | Fastify                   | 4.23.2    |       46,238 |
-| **Oweb (Fastify)**        | 1.5.7-dev |       42,570 |
+| **Oweb (Fastify)**        | 1.5.8-dev |       42,570 |
 | Node.js http.createServer | 24.5.0    |       42,544 |
 | Express                   | 5.2.1     |       24,913 |
 
 This is a synthetic "Hello, Word!" benchmark that aims to evaluate the framework overhead.
 The overhead that each framework has on your application depends on your application.
 You should always benchmark if performance matters to you.
+
+## Best Performance
+
+For the highest throughput, use these defaults:
+
+- Enable uWebSockets runtime: `uWebSocketsEnabled: true`
+- Disable powered-by header: `poweredByHeader: false`
+- For headers that should be sent on every request (for example CORS-related headers), use `staticResponseHeaders` instead of per-request hooks
+
+Example (production-oriented):
+
+```js
+import Oweb from 'owebjs';
+
+const app = await new Oweb({
+    uWebSocketsEnabled: true,
+    poweredByHeader: false,
+    staticResponseHeaders: {
+        // CORS (set your real origin in production)
+        'access-control-allow-origin': 'https://yourdomain.com',
+        'access-control-allow-methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
+        'access-control-allow-headers': 'Content-Type, Authorization',
+        vary: 'Origin',
+
+        // Security headers
+        'x-content-type-options': 'nosniff',
+        'x-frame-options': 'DENY',
+        'referrer-policy': 'strict-origin-when-cross-origin',
+        'permissions-policy': 'geolocation=(), microphone=(), camera=()',
+        'cross-origin-opener-policy': 'same-origin',
+        'cross-origin-resource-policy': 'same-site',
+    },
+}).setup();
+
+await app.loadRoutes({
+    directory: 'routes',
+    hmr: {
+        enabled: false,
+    },
+});
+
+await app.start({ port: 3000, host: '0.0.0.0' });
+```
 
 ## First App (2 Minutes)
 
