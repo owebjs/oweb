@@ -167,7 +167,7 @@ routes/
     [id].js
   auth/
     login.post.js
-  matcher/
+  posts/
     [id=integer].js
   events/
     sse.js
@@ -236,7 +236,7 @@ export default class LoginPostRoute extends Route {
 
 Matcher params add filename-level validation.
 
-`routes/matcher/[id=integer].js` + `matchers/integer.js`
+`routes/posts/[id=integer].js` + `matchers/integer.js`
 
 ```js
 // matchers/integer.js
