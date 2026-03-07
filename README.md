@@ -69,15 +69,16 @@ When to prefer `uWebSocketsEnabled: true`:
 **Method**: `autocannon -c 100 -d 40 -p 10 localhost:3000` \* 2, taking the
 second average
 
-| Runtime                   | Version   | Requests/sec |
-| ------------------------- | --------- | -----------: |
-| uWebSockets.js            | 20.52.0   |       79,149 |
-| **Oweb (uWS)**            | 1.5.8-dev |       76,853 |
-| 0http                     | 4.4.0     |       46,605 |
-| Fastify                   | 4.23.2    |       46,238 |
-| **Oweb (Fastify)**        | 1.5.8-dev |       42,570 |
-| Node.js http.createServer | 24.5.0    |       42,544 |
-| Express                   | 5.2.1     |       24,913 |
+| Runtime                   | Version     | Requests/sec |
+| ------------------------- | ----------- | -----------: |
+| uWebSockets.js            | 20.52.0     |       79,149 |
+| **Oweb (uWS)**            | 1.5.8-dev   |       76,853 |
+| 0http                     | 4.4.0       |       46,605 |
+| Fastify                   | 4.23.2      |       46,238 |
+| **Oweb (Fastify)**        | 1.5.8-dev   |       42,570 |
+| Node.js http.createServer | 24.5.0      |       42,544 |
+| H3 (v2 API)               | 2.0.1-rc.14 |       36,063 |
+| Express                   | 5.2.1       |       24,913 |
 
 This is a synthetic "Hello, Word!" benchmark that aims to evaluate the framework overhead.
 The overhead that each framework has on your application depends on your application.
