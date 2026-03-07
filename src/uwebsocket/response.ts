@@ -1,6 +1,7 @@
 import { Writable } from 'stream';
 import { toLowerCase } from './utils/string.js';
 import HttpResponseSocket from './responseSocket';
+import http from 'node:http';
 
 export default class HttpResponse extends Writable {
     res;
@@ -10,26 +11,38 @@ export default class HttpResponse extends Writable {
     statusMessage;
     __headers;
     headersSent;
-    socket;
     finished;
+    staticHeaders?: [string, string][];
+    private _socket: any = null;
 
-    constructor(uResponse, uServer) {
+    constructor(uResponse, uServer, staticHeaders?: [string, string][]) {
         super();
 
         this.res = uResponse;
         this.server = uServer;
 
         this.statusCode = 200;
-        this.statusMessage = 'OK';
-
+        this.statusMessage = null;
         this.__headers = {};
         this.headersSent = false;
+        this.finished = false;
+        this.staticHeaders = staticHeaders;
+    }
 
-        this.socket = new HttpResponseSocket(uResponse);
+    public get socket() {
+        if (!this._socket) {
+            this._socket = new HttpResponseSocket(this.res);
+        }
 
-        this.res.onAborted(() => {
-            this.finished = this.res.finished = true;
-        });
+        return this._socket;
+    }
+
+    private isClosed() {
+        return this.finished || this.res.aborted || this.res.finished;
+    }
+
+    public get sent() {
+        return this.isClosed();
     }
 
     setHeader(name, value) {
@@ -58,9 +71,26 @@ export default class HttpResponse extends Writable {
     }
 
     _flushHeaders() {
-        if (this.headersSent) return;
+        if (this.headersSent || this.isClosed()) return;
 
-        this.res.writeStatus(`${this.statusCode} ${this.statusMessage}`);
+        const message = this.statusMessage || http.STATUS_CODES[this.statusCode] || 'Unknown';
+        this.res.writeStatus(`${this.statusCode} ${message}`);
+
+        if (this.staticHeaders?.length) {
+            for (let i = 0; i < this.staticHeaders.length; i++) {
+                const [key, value] = this.staticHeaders[i];
+
+                if (key === 'content-length' || key === 'transfer-encoding') {
+                    continue;
+                }
+
+                if (this.__headers[key] !== undefined) {
+                    continue;
+                }
+
+                this.res.writeHeader(key, value);
+            }
+        }
 
         const keys = Object.keys(this.__headers);
         for (let i = 0; i < keys.length; i++) {
@@ -72,7 +102,6 @@ export default class HttpResponse extends Writable {
             }
 
             const value = this.__headers[key];
-
             if (Array.isArray(value)) {
                 for (let j = 0; j < value.length; j++) {
                     this.res.writeHeader(key, String(value[j]));
@@ -87,15 +116,18 @@ export default class HttpResponse extends Writable {
 
     //@ts-ignore
     write(data) {
-        if (this.finished) return;
+        if (this.isClosed()) return;
 
-        this._flushHeaders();
-
-        this.res.write(data);
+        this.res.cork(() => {
+            this._flushHeaders();
+            if (!this.isClosed()) {
+                this.res.write(data);
+            }
+        });
     }
 
     writeHead(statusCode) {
-        if (this.finished) return;
+        if (this.isClosed()) return;
 
         this.statusCode = statusCode;
         let headers;
@@ -114,23 +146,19 @@ export default class HttpResponse extends Writable {
 
     //@ts-ignore
     end(data) {
-        if (this.finished) return;
+        if (this.isClosed()) return;
 
-        const self = this;
+        this.res.cork(() => {
+            this._flushHeaders();
 
-        function doWrite() {
-            self._flushHeaders();
+            this.finished = true;
 
-            self.finished = true;
-
-            self.res.end(data);
-        }
-
-        if (!data) {
-            data = '';
-        }
-
-        return doWrite();
+            if (!data) {
+                this.res.end();
+            } else {
+                this.res.end(data);
+            }
+        });
     }
 
     getRaw() {

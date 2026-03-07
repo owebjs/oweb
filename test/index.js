@@ -8,6 +8,7 @@ await app.register(fastifyMultipart, {
     limits: {
         fileSize: 20 * 1024 * 1024,
     },
+    attachFieldsToBody: true,
 });
 
 const allowedMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'];

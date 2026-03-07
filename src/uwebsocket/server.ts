@@ -3,13 +3,20 @@ const REQUEST_EVENT = 'request';
 
 import HttpRequest from './request';
 import HttpResponse from './response';
+import http from 'node:http';
 
 export default async function ({
     cert_file_name,
     key_file_name,
+    staticResponseHeaders,
+    autoPreflight,
+    poweredByHeader,
 }: {
     cert_file_name?: string;
     key_file_name?: string;
+    staticResponseHeaders?: Record<string, string>;
+    autoPreflight?: boolean;
+    poweredByHeader?: boolean;
 }) {
     let uWS;
     uWS = (await import('uWebSockets.js')).default;
@@ -23,7 +30,6 @@ export default async function ({
     let handler = (req, res) => {
         res.statusCode = 404;
         res.statusMessage = 'Not Found';
-
         res.end();
     };
 
@@ -32,39 +38,109 @@ export default async function ({
         key_file_name,
     };
 
-    const uServer = uWS[appType](config).any('/*', (res, req) => {
-        res.finished = false;
+    const normalizedStaticHeaders: [string, string][] | undefined = staticResponseHeaders
+        ? Object.entries(staticResponseHeaders).map(([k, v]) => [k.toLowerCase(), String(v)])
+        : undefined;
 
-        const reqWrapper = new HttpRequest(req);
-        const resWrapper = new HttpResponse(res, uServer);
+    const copyArrayBufferToBuffer = (bytes: ArrayBuffer): Buffer => {
+        const src = new Uint8Array(bytes);
+        const out = Buffer.allocUnsafe(src.byteLength);
+        out.set(src);
+        return out;
+    };
+
+    const uServer = uWS[appType](config).any('/*', (res, req) => {
+        const method = req.getMethod().toUpperCase();
+        const query = req.getQuery();
+        const url = req.getUrl();
+        const requiresBody = method !== 'HEAD' && method !== 'GET';
+        if (autoPreflight && method === 'OPTIONS') {
+            res.writeStatus('204 No Content');
+
+            let hasPoweredByHeader = false;
+
+            if (normalizedStaticHeaders?.length) {
+                for (let i = 0; i < normalizedStaticHeaders.length; i++) {
+                    const [key, value] = normalizedStaticHeaders[i];
+
+                    if (key === 'content-length' || key === 'transfer-encoding') {
+                        continue;
+                    }
+
+                    if (key === 'x-powered-by') {
+                        hasPoweredByHeader = true;
+                    }
+
+                    res.writeHeader(key, value);
+                }
+            }
+
+            if (poweredByHeader && !hasPoweredByHeader) {
+                res.writeHeader('x-powered-by', 'Oweb');
+            }
+
+            res.end();
+            return;
+        }
+
+
+        res.finished = false;
+        res.aborted = false;
+
+        if (requiresBody) {
+            res.isPaused = false;
+        }
+
+        res.onAborted(() => {
+            res.aborted = true;
+            res.finished = true;
+        });
+
+        const reqWrapper = new HttpRequest(req, res, { method, query, url });
+        const resWrapper = new HttpResponse(res, uServer, normalizedStaticHeaders);
 
         reqWrapper.res = resWrapper;
         resWrapper.req = reqWrapper;
+        reqWrapper.bindSocketFactory(() => resWrapper.socket);
 
-        reqWrapper.socket = resWrapper.socket;
+        handler(reqWrapper, resWrapper);
 
-        const method = reqWrapper.method;
-        if (method !== 'HEAD') {
-            // 0http's low checks also that method !== 'GET', but many users would send request body with GET, unfortunately
+        // also check for finished state so that the 404 handler doesnt crap itself
+        if (requiresBody && !resWrapper.finished) {
+            const originalResume = res.resume;
+            res.resume = function () {
+                if (res.isPaused && !res.finished && !res.aborted) {
+                    res.isPaused = false;
+                    originalResume.call(res);
+                }
+            };
+
             res.onData((bytes, isLast) => {
-                const chunk = Buffer.from(bytes);
+                if (res.finished || res.aborted || reqWrapper.destroyed) return;
+
+                const chunk = copyArrayBufferToBuffer(bytes);
+                const streamReady = reqWrapper.push(chunk);
+
                 if (isLast) {
-                    reqWrapper.push(chunk);
+                    reqWrapper.complete = true;
                     reqWrapper.push(null);
-                    if (!res.finished) {
-                        return handler(reqWrapper, resWrapper);
-                    }
                     return;
                 }
 
-                return reqWrapper.push(chunk);
+                if (!streamReady && !res.isPaused) {
+                    res.isPaused = true;
+                    res.pause();
+                }
             });
-        } else if (!res.finished) {
-            handler(reqWrapper, resWrapper);
+        } else if (!resWrapper.finished) {
+            reqWrapper.complete = true;
+            reqWrapper.push(null);
         }
     });
 
     class uServerClass extends EventEmitter {
+        public _socket: any;
+
         constructor() {
             super();
 
@@ -85,27 +161,24 @@ export default async function ({
         }
 
         close(cb) {
-            uWS.us_listen_socket_close(uServer._socket);
-            if (!cb) return;
-            return cb();
+            if (uServer._socket) {
+                uWS.us_listen_socket_close(uServer._socket);
+                uServer._socket = null;
+            }
+            if (cb) cb();
         }
 
         start(host, port, cb) {
-            let args;
-            const callbackFunction = function (socket) {
-                uServer._socket = socket;
-
-                if (cb) cb(socket);
+            const callbackFunction = function (token) {
+                uServer._socket = token;
+                if (cb) cb(token);
             };
-            if (host && port && cb) {
-                args = [host, port, callbackFunction];
+
+            if (host && port) {
+                return uServer.listen(host, port, callbackFunction);
+            } else {
+                return uServer.listen(port || host, callbackFunction);
             }
-            if (!cb && (!port || typeof port === 'function')) {
-                cb = port;
-                port = host;
-                args = [port, callbackFunction];
-            }
-            return uServer.listen(...args);
         }
 
         listen(host, port, cb) {
@@ -113,22 +186,198 @@ export default async function ({
                 const listenOptions = host;
                 port = listenOptions.port;
                 cb = listenOptions.cb;
-                host = listenOptions.host;
-                return this.start(host, port, (socket) => {
-                    uServer._socket = socket;
+                host = listenOptions.host || '0.0.0.0';
 
-                    if (cb) cb(socket);
+                return this.start(host, port, (token) => {
+                    if (token) {
+                        uServer._socket = token;
+
+                        if (cb) cb(null, `http://${host}:${port}`);
+                    } else {
+                        if (cb) cb(new Error(`Failed to listen on ${host}:${port}`));
+                    }
                 });
             } else {
                 if ((!port || typeof port === 'function') && !cb) {
                     cb = port;
                     port = host;
-                    //@ts-ignore
-                    return this.start(port, cb);
-                } else {
-                    return this.start(host, port, cb);
+                    host = '0.0.0.0';
                 }
+
+                return this.start(host, port, (token) => {
+                    if (token) {
+                        uServer._socket = token;
+                        if (cb) cb(null, `http://${host}:${port}`);
+                    } else {
+                        if (cb) cb(new Error(`Failed to listen on ${host}:${port}`));
+                    }
+                });
             }
+        }
+
+        ws(pattern, behaviors, hooks = []) {
+            uServer.ws(pattern, {
+                compression: behaviors.compression,
+                maxPayloadLength: behaviors.maxPayloadLength,
+                idleTimeout: behaviors.idleTimeout,
+                sendPingsAutomatically: behaviors.sendPingsAutomatically,
+
+                upgrade: async (res, req, context) => {
+                    const url = req.getUrl();
+                    const query = req.getQuery();
+                    const method = req.getMethod().toUpperCase();
+                    const headers = {};
+
+                    req.forEach((key, value) => {
+                        headers[key] = value;
+                    });
+
+                    const params = {};
+
+                    if (pattern.includes(':') || pattern.includes('*')) {
+                        const parts = pattern.split('/');
+                        let paramIndex = 0;
+
+                        for (const part of parts) {
+                            if (part.startsWith(':')) {
+                                const name = part.slice(1);
+                                params[name] = req.getParameter(paramIndex);
+                                paramIndex++;
+                            } else if (part === '*') {
+                                params['*'] = req.getParameter(paramIndex);
+                                paramIndex++;
+                            }
+                        }
+                    }
+
+                    const secKey = headers['sec-websocket-key'];
+                    const secProtocol = headers['sec-websocket-protocol'];
+                    const secExtensions = headers['sec-websocket-extensions'];
+
+                    let aborted = false;
+                    res.onAborted(() => {
+                        aborted = true;
+                    });
+
+                    const reqWrapper = {
+                        url: url + (query ? '?' + query : ''),
+                        routerPath: pattern,
+                        query: new URLSearchParams(query),
+                        headers,
+                        method,
+                        params,
+                        raw: { url, method, headers },
+                    };
+
+                    const resWrapper = {
+                        statusCode: 200,
+                        _headers: {},
+                        finished: false,
+                        get sent() {
+                            return this.finished;
+                        },
+
+                        header(key, value) {
+                            this._headers[key.toLowerCase()] = value;
+                            return this;
+                        },
+                        status(code) {
+                            this.statusCode = code;
+                            return this;
+                        },
+                        send(payload) {
+                            if (aborted || this.finished) return;
+                            this.finished = true;
+
+                            const message = http.STATUS_CODES[this.statusCode] || 'Response';
+                            res.writeStatus(`${this.statusCode} ${message}`);
+
+                            for (const [k, v] of Object.entries(this._headers)) {
+                                res.writeHeader(k, String(v));
+                            }
+                            res.end(
+                                typeof payload === 'object'
+                                    ? JSON.stringify(payload)
+                                    : String(payload),
+                            );
+                            return this;
+                        },
+                    };
+                    const sendUpgradeError = (hookError: any) => {
+                        if (aborted || resWrapper.finished) return;
+
+                        const normalizedError =
+                            hookError instanceof Error ? hookError : new Error(String(hookError));
+
+                        console.error('WebSocket Hook Error:', normalizedError);
+                        res.writeStatus('500 Internal Server Error');
+                        res.end(
+                            JSON.stringify({
+                                error: 'Internal Server Error',
+                                message: normalizedError.message,
+                            }),
+                        );
+                    };
+
+                    const finishUpgrade = () => {
+                        if (aborted || resWrapper.finished) return;
+
+                        const reqData = {
+                            ...reqWrapper,
+                            query: query,
+                        };
+
+                        res.upgrade({ req: reqData }, secKey, secProtocol, secExtensions, context);
+                    };
+
+                    let hookIndex = 0;
+
+                    const runNextHook = (hookError?: any) => {
+                        if (hookError) {
+                            sendUpgradeError(hookError);
+                            return;
+                        }
+
+                        if (aborted || resWrapper.finished) return;
+
+                        if (hookIndex >= hooks.length) {
+                            finishUpgrade();
+                            return;
+                        }
+
+                        const HookClass = hooks[hookIndex++];
+                        const hookInstance =
+                            typeof HookClass === 'function' ? new HookClass() : HookClass;
+
+                        let doneCalled = false;
+                        const done = (doneError?: any) => {
+                            if (doneCalled) return;
+                            doneCalled = true;
+                            runNextHook(doneError);
+                        };
+
+                        try {
+                            hookInstance.handle(reqWrapper, resWrapper, done);
+                        } catch (err) {
+                            done(err);
+                        }
+                    };
+
+                    runNextHook();
+                },
+
+                open: (ws) => {
+                    if (behaviors.open) {
+                        const data = ws.getUserData();
+                        behaviors.open(ws, data.req);
+                    }
+                },
+                message: behaviors.message,
+                drain: behaviors.drain,
+                close: behaviors.close,
+                ping: behaviors.ping,
+                pong: behaviors.pong,
+            });
         }
 
         get uwsApp() {
@@ -143,3 +392,6 @@ export default async function ({
 
     return initUServer;
 }
+
+
+

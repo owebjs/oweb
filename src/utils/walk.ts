@@ -1,8 +1,9 @@
 import { readdirSync, statSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { mergePaths } from './utils';
 import { Hook } from '../structures/Hook';
+import { warn } from './logger';
 
 export interface WalkResult {
     name: string;
@@ -11,8 +12,6 @@ export interface WalkResult {
     rel: string;
     filePath: string;
 }
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const isParentOrGrandparent = (parentFolderPath: string, childFolderPath: string) => {
     if (childFolderPath.startsWith(parentFolderPath)) {
@@ -26,12 +25,11 @@ const isParentOrGrandparent = (parentFolderPath: string, childFolderPath: string
     return false;
 };
 
-const hookPaths = new Set();
-
 export const walk = async (
     directory: string,
-    tree = [],
+    tree: string[] = [],
     fallbackDir?: string,
+    hookPaths: Set<string> = new Set(),
 ): Promise<WalkResult[]> => {
     const results = [];
 
@@ -51,7 +49,7 @@ export const walk = async (
         const filePath = path.join(directory, fileName);
         const directoryResolve = path.resolve(directory);
 
-        //if it's a hook which it's path is routes/_hooks.js
+        // if it's a hook which its path is routes/_hooks.js
         if (fileName == '_hooks.js' || fileName == '_hooks.ts') {
             hookPaths.add(directoryResolve);
             continue;
@@ -60,7 +58,7 @@ export const walk = async (
         const fileStats = statSync(filePath);
 
         if (fileStats.isDirectory()) {
-            results.push(...(await walk(filePath, [...tree, fileName], fallbackDir)));
+            results.push(...(await walk(filePath, [...tree, fileName], fallbackDir, hookPaths)));
         } else {
             if (!['.js', '.ts'].includes(path.extname(fileName))) continue;
 
@@ -71,11 +69,11 @@ export const walk = async (
                 return ren;
             });
 
-            const copyHooks = [hooks].flat(); //using toSorted would be great if it support node 16 and beyond
-            let scopingSort = copyHooks.sort((a: string, b: string) => b.length - a.length); //sort nearest
+            const copyHooks = [hooks].flat(); // using toSorted would be great if it supports node 16 and beyond
+            let scopingSort = copyHooks.sort((a: string, b: string) => b.length - a.length); // sort nearest
 
-            const scopeIndex = scopingSort.findIndex((path: string) => {
-                const lastdir = path.split('\\').at(-1);
+            const scopeIndex = scopingSort.findIndex((pathstr: string) => {
+                const lastdir = pathstr.split(path.sep).at(-1);
                 return lastdir.startsWith('(') && lastdir.endsWith(')');
             });
 
@@ -89,34 +87,38 @@ export const walk = async (
             }
 
             const hooksImport = useHook.map((hookPath: string) => {
+                let targetFile = '';
+
                 if (fallbackDir) {
-                    const findLastPath = hookPath.replace(process.cwd(), '').split('\\').at(-1);
+                    let rootWalkDir = directoryResolve;
+                    for (let i = 0; i < tree.length; i++) {
+                        rootWalkDir = path.dirname(rootWalkDir);
+                    }
 
-                    const additionNeeded = !fallbackDir.endsWith(`/${findLastPath}`);
+                    const relHook = path.relative(rootWalkDir, hookPath);
 
-                    return (
-                        new URL(
-                            path.join(
-                                process.cwd(),
-                                fallbackDir,
-                                additionNeeded ? `/${findLastPath}` : '',
-                            ),
-                        ).pathname.replaceAll('\\', '/') + '/_hooks.js'
-                    );
+                    const fallbackRoot = path.isAbsolute(fallbackDir)
+                        ? fallbackDir
+                        : path.join(process.cwd(), fallbackDir);
+                    const targetDir = path.join(fallbackRoot, relHook);
+                    targetFile = path.join(targetDir, '_hooks.js');
                 } else {
-                    return (
-                        new URL(hookPath, `file://${__dirname}`).pathname.replaceAll('\\', '/') +
-                        '/_hooks.js'
-                    );
+                    targetFile = path.join(hookPath, '_hooks.js');
                 }
+
+                return pathToFileURL(targetFile).href;
             });
 
             const hookFunctions = [];
 
             for (const importPath of hooksImport) {
-                const imp = await import(importPath);
-                if (imp?.default) {
-                    hookFunctions.push(imp.default);
+                try {
+                    const imp = await import(importPath);
+                    if (imp?.default) {
+                        hookFunctions.push(imp.default);
+                    }
+                } catch (e) {
+                    warn(`Failed to load hook from ${importPath}. Make sure the file exists.`);
                 }
             }
 

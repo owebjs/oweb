@@ -6,12 +6,20 @@ import Fastify, {
     type FastifyReply,
     type RawServerDefault,
 } from 'fastify';
+import type { FSWatcher } from 'chokidar';
 import { applyMatcherHMR, applyRouteHMR, assignRoutes } from '../utils/assignRoutes';
 import { watchDirectory } from '../utils/watcher';
 import { info, success, warn } from '../utils/logger';
 
+import websocketPlugin from '@fastify/websocket';
+
+const HMR_WATCHERS_KEY = 'hmr:watchers';
+
 export interface OwebOptions extends FastifyServerOptions {
     uWebSocketsEnabled?: boolean;
+    poweredByHeader?: boolean;
+    autoPreflight?: boolean;
+    staticResponseHeaders?: Record<string, string>;
     OWEB_INTERNAL_ERROR_HANDLER?: Function;
 }
 
@@ -33,10 +41,15 @@ class _FastifyInstance {}
 
 export class Oweb extends _FastifyInstance {
     public _options: OwebOptions = {};
+
+    public _internalKV: Map<string, any> = new Map();
+
     private hmrDirectory: string;
     private hmrMatchersDirectory: string;
     private directory: string;
     private matchersDirectory: string;
+
+    public uServer: any = null;
 
     public routes: Map<string, any> = new Map();
 
@@ -46,6 +59,8 @@ export class Oweb extends _FastifyInstance {
         this._options = options ?? {};
 
         this._options.uWebSocketsEnabled ??= false;
+        this._options.poweredByHeader ??= true;
+        this._options.autoPreflight ??= false;
         this._options.OWEB_INTERNAL_ERROR_HANDLER ??= (
             _: FastifyRequest,
             res: FastifyReply,
@@ -55,6 +70,32 @@ export class Oweb extends _FastifyInstance {
         };
     }
 
+    private getHmrWatchers(): FSWatcher[] {
+        let watchers = this._internalKV.get(HMR_WATCHERS_KEY) as FSWatcher[] | undefined;
+
+        if (!watchers) {
+            watchers = [];
+            this._internalKV.set(HMR_WATCHERS_KEY, watchers);
+        }
+
+        return watchers;
+    }
+
+    private async closeHMRWatchers() {
+        const watchers = this.getHmrWatchers();
+
+        if (!watchers.length) return;
+
+        const activeWatchers = watchers.splice(0, watchers.length);
+        await Promise.all(
+            activeWatchers.map(async (watcher) => {
+                try {
+                    await watcher.close();
+                } catch {}
+            }),
+        );
+    }
+
     /**
      *
      * Returns a fastify instance with the Oweb prototype methods
@@ -62,19 +103,74 @@ export class Oweb extends _FastifyInstance {
     public async setup(): Promise<Oweb> {
         if (this._options.uWebSocketsEnabled) {
             const serverimp = (await import('../uwebsocket/server.js')).default;
-            const server = await serverimp({});
+            const server = await serverimp({
+                staticResponseHeaders: this._options.staticResponseHeaders,
+                autoPreflight: this._options.autoPreflight,
+                poweredByHeader: this._options.poweredByHeader,
+            });
+
+            this.uServer = server;
 
             this._options.serverFactory = (handler) => {
                 server.on('request', handler);
                 return server as unknown as RawServerDefault;
             };
+        } else {
+            this.uServer = null;
         }
 
         const fastify = Fastify(this._options);
 
-        fastify.addHook('onRequest', (_, res, done) => {
-            res.header('X-Powered-By', 'Oweb');
-            done();
+        if (!this._options.uWebSocketsEnabled) {
+            await fastify.register(websocketPlugin);
+        }
+
+        const staticHeaderEntries = this._options.staticResponseHeaders
+            ? Object.entries(this._options.staticResponseHeaders)
+            : [];
+
+        if (
+            !this._options.uWebSocketsEnabled &&
+            (this._options.poweredByHeader || staticHeaderEntries.length)
+        ) {
+            fastify.addHook('onRequest', (_, res, done) => {
+                if (this._options.poweredByHeader) {
+                    res.header('X-Powered-By', 'Oweb');
+                }
+
+                for (let i = 0; i < staticHeaderEntries.length; i++) {
+                    const [key, value] = staticHeaderEntries[i];
+                    res.header(key, value as any);
+                }
+
+                done();
+            });
+        } else if (this._options.poweredByHeader) {
+            fastify.addHook('onRequest', (_, res, done) => {
+                res.header('X-Powered-By', 'Oweb');
+                done();
+            });
+        }
+
+        if (this._options.autoPreflight && !this._options.uWebSocketsEnabled) {
+            fastify.options('/*', (_req, res) => {
+                return res.status(204).send();
+            });
+        }
+
+        const internalKV = this._internalKV;
+        fastify.addHook('onClose', async () => {
+            const watchers = internalKV.get(HMR_WATCHERS_KEY) as FSWatcher[] | undefined;
+            if (!watchers?.length) return;
+
+            const activeWatchers = watchers.splice(0, watchers.length);
+            await Promise.all(
+                activeWatchers.map(async (watcher) => {
+                    try {
+                        await watcher.close();
+                    } catch {}
+                }),
+            );
         });
 
         for (const key in Object.getOwnPropertyDescriptors(Oweb.prototype)) {
@@ -87,6 +183,19 @@ export class Oweb extends _FastifyInstance {
             );
         }
 
+        Object.defineProperty(fastify, '_internalKV', {
+            value: this._internalKV,
+            writable: true,
+            enumerable: false,
+        });
+
+        Object.defineProperty(fastify, 'uServer', {
+            value: this.uServer,
+            writable: true,
+            enumerable: false,
+            configurable: false,
+        });
+
         Object.defineProperty(fastify, '_options', {
             value: this._options,
             writable: true,
@@ -95,6 +204,16 @@ export class Oweb extends _FastifyInstance {
         });
 
         return fastify as unknown as Oweb;
+    }
+
+    public ws(url: string, behavior: any, hooks: any[] = []) {
+        if (this.uServer) {
+            this.uServer.ws(url, behavior, hooks);
+        } else {
+            warn(
+                'Oweb#ws is only available when uWebSockets is enabled. For Fastify instances, Oweb automatically handles registrations.',
+            );
+        }
     }
 
     /**
@@ -116,8 +235,11 @@ export class Oweb extends _FastifyInstance {
         if (hmr?.enabled) {
             this.hmrDirectory = hmr.directory;
             this.hmrMatchersDirectory = hmr.matchersDirectory;
+            this._internalKV.set('hmr', true);
             success(`Hot Module Replacement enabled. Watching changes in ${hmr.directory}`, 'HMR');
         } else {
+            this._internalKV.set('hmr', false);
+            void this.closeHMRWatchers();
             warn(
                 'Hot Module Replacement is disabled. Use "await app.loadRoutes({ hmr: { enabled: true, directory: path } })" to enable it.',
                 'HMR',
@@ -131,22 +253,33 @@ export class Oweb extends _FastifyInstance {
      *
      * Watches for changes in the routes directory
      */
-    private watch() {
-        watchDirectory(this.hmrDirectory, true, (op, path, content) => {
+    private async watch() {
+        await this.closeHMRWatchers();
+
+        const watchers = this.getHmrWatchers();
+
+        const routeWatcher = watchDirectory(this.hmrDirectory, true, (op, path, content) => {
             applyRouteHMR(this, op, this.hmrDirectory, this.directory, path, content);
         });
+        watchers.push(routeWatcher);
 
         if (this.hmrMatchersDirectory) {
-            watchDirectory(this.hmrMatchersDirectory, true, (op, path, content) => {
-                applyMatcherHMR(
-                    this,
-                    op,
-                    this.hmrMatchersDirectory,
-                    this.matchersDirectory,
-                    path,
-                    content,
-                );
-            });
+            const matcherWatcher = watchDirectory(
+                this.hmrMatchersDirectory,
+                true,
+                (op, path, content) => {
+                    applyMatcherHMR(
+                        this,
+                        op,
+                        this.hmrMatchersDirectory,
+                        this.matchersDirectory,
+                        path,
+                        content,
+                    );
+                },
+            );
+
+            watchers.push(matcherWatcher);
         }
     }
 
@@ -164,7 +297,11 @@ export class Oweb extends _FastifyInstance {
         return new Promise<{ err: Error; address: string }>((resolve) => {
             this.listen({ port, host }, (err, address) => {
                 if (process.env.NODE_ENV !== 'production') {
-                    if (this.hmrDirectory) this.watch();
+                    if (this.hmrDirectory) {
+                        this.watch().catch((watchError) => {
+                            warn(`HMR watcher failed to initialize: ${watchError.message}`, 'HMR');
+                        });
+                    }
                 } else {
                     info(
                         'Hot Module Replacement is disabled in production mode. NODE_ENV is set to production.',

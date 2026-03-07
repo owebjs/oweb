@@ -1,4 +1,4 @@
-import { Hook } from '../../dist/index.js';
+import { Hook } from '../../../../dist/index.js';
 
 export default class extends Hook {
     /**
@@ -6,11 +6,9 @@ export default class extends Hook {
      * @param {import("fastify").FastifyReply} res
      */
     handle(req, res, done) {
-        console.log('Hello from routes > _hooks.js');
+        console.log('Hello from routes > route2 > _hooks.js');
 
-        req.locals = {};
-
-        req.locals['test'] = true;
+        console.log(req.params);
 
         done();
     }
