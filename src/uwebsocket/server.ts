@@ -91,17 +91,20 @@ export default async function ({
             res.isPaused = false;
         }
 
-        res.onAborted(() => {
-            res.aborted = true;
-            res.finished = true;
-        });
-
         const reqWrapper = new HttpRequest(req, res, { method, query, url });
         const resWrapper = new HttpResponse(res, uServer, normalizedStaticHeaders);
 
         reqWrapper.res = resWrapper;
         resWrapper.req = reqWrapper;
         reqWrapper.bindSocketFactory(() => resWrapper.socket);
+
+        res.onAborted(() => {
+            res.aborted = true;
+            res.finished = true;
+            resWrapper.finished = true;
+            resWrapper.emit('aborted');
+            resWrapper.emit('close');
+        });
 
         handler(reqWrapper, resWrapper);
 

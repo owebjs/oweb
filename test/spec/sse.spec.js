@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp } from '../helpers/app.js';
-import { requestJson } from '../helpers/http.js';
+import { requestJson, waitFor } from '../helpers/http.js';
 import { collectSseEvents } from '../helpers/sse.js';
 
 describe('SSE streaming', () => {
@@ -27,5 +27,48 @@ describe('SSE streaming', () => {
 
         expect(response.status).toBe(401);
         expect(body).toEqual({ code: 'error.unauthorized' });
+    });
+
+    it('stops streaming when an infinite SSE response is cancelled', async () => {
+        const unhandled = [];
+        const onUnhandled = (reason) => {
+            unhandled.push(reason);
+        };
+
+        process.on('unhandledRejection', onUnhandled);
+
+        try {
+            const { response, events } = await collectSseEvents(
+                `${server.baseUrl}/events/infinite`,
+                1,
+            );
+
+            expect(response.status).toBe(200);
+            expect(events).toEqual(['tick-0']);
+
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            expect(unhandled).toEqual([]);
+        } finally {
+            process.off('unhandledRejection', onUnhandled);
+        }
+    });
+
+    it('emits close and aborted events to route handlers when SSE is cancelled', async () => {
+        await requestJson(server.baseUrl, '/events/abort-state?reset=1');
+
+        const { response, events } = await collectSseEvents(
+            `${server.baseUrl}/events/abort-listener`,
+            1,
+        );
+
+        expect(response.status).toBe(200);
+        expect(events).toEqual(['listening']);
+
+        await waitFor(async () => {
+            const { body } = await requestJson(server.baseUrl, '/events/abort-state');
+            expect(body.aborted).toBeGreaterThanOrEqual(1);
+            expect(body.close).toBeGreaterThanOrEqual(1);
+            return true;
+        });
     });
 });

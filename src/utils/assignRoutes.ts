@@ -1,4 +1,5 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
+import type { OutgoingHttpHeaders } from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { buildRoutePath, buildRouteURL } from './utils';
@@ -433,47 +434,31 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
             ? result[Symbol.asyncIterator]()
             : result[Symbol.iterator]();
 
-        let firstChunk;
+        let aborted = false;
+        let resolveAbort: ((value: IteratorResult<any>) => void) | undefined;
+        let iteratorReturnCalled = false;
 
-        try {
-            firstChunk = await iterator.next();
-        } catch (err) {
-            // if occurs before the first yield
-            handleError(req, res, err);
-            return;
-        }
+        const abortedResult: IteratorResult<any> = { done: true, value: undefined };
 
-        if (res.sent) return;
-
-        if (firstChunk.done) {
-            if (firstChunk.value !== undefined) res.send(firstChunk.value);
-            return;
-        }
-
-        const rawObj = res.raw as any;
-        const uwsRes = rawObj.res && typeof rawObj.res.cork === 'function' ? rawObj.res : null;
-
-        const corkedOp = (op: () => void) => {
-            if (uwsRes) uwsRes.cork(op);
-            else op();
-        };
-
-        corkedOp(() => {
-            const headers = {
-                ...res.getHeaders(),
-                'Content-Type': 'text/event-stream',
-                'Cache-Control': 'no-cache',
-                Connection: 'keep-alive',
-            };
-            res.raw.writeHead(200, headers);
-            if (res.raw.flushHeaders) res.raw.flushHeaders();
+        const abortedPromise = new Promise<IteratorResult<any>>((resolve) => {
+            resolveAbort = resolve;
         });
 
-        let aborted = false;
+        const closeIterator = () => {
+            if (iteratorReturnCalled || typeof iterator.return !== 'function') return;
+
+            iteratorReturnCalled = true;
+            Promise.resolve(iterator.return()).catch(() => {});
+        };
 
         const onAborted = () => {
+            if (aborted) return;
             aborted = true;
+            resolveAbort?.(abortedResult);
+            closeIterator();
         };
+
+        const rawObj = res.raw as any;
 
         if (res.raw.on) {
             res.raw.on('close', onAborted);
@@ -482,39 +467,127 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
             rawObj['onAborted'](onAborted);
         }
 
-        try {
-            corkedOp(() => {
-                res.raw.write(formatSSE(firstChunk.value));
-            });
-
-            while (true) {
-                if (aborted || res.raw.destroyed) break;
-                const chunk = await iterator.next();
-
-                if (chunk.done) break;
-
-                corkedOp(() => {
-                    res.raw.write(formatSSE(chunk.value));
-                });
-            }
-        } catch (err: any) {
-            error(
-                'Error while streaming response for ' +
-                    route.method.toUpperCase() +
-                    ':' +
-                    route.url +
-                    ' - ' +
-                    err.message,
-                'SSE',
-            );
-        } finally {
+        const cleanupListeners = () => {
             if (res.raw.off) {
                 res.raw.off('close', onAborted);
                 res.raw.off('aborted', onAborted);
             }
+        };
 
-            if (!aborted && !res.raw.destroyed) {
-                corkedOp(() => {
+        const isResponseClosed = () =>
+            aborted ||
+            res.sent ||
+            res.raw.destroyed ||
+            res.raw.writableEnded ||
+            rawObj?.res?.aborted ||
+            rawObj?.res?.finished;
+
+        const nextChunk = async (): Promise<IteratorResult<any>> => {
+            if (isResponseClosed()) return abortedResult;
+
+            const next = iterator.next();
+
+            if (!isAsyncIterable) return next;
+
+            return Promise.race([next, abortedPromise]);
+        };
+
+        const writeIfOpen = (op: () => void) => {
+            if (isResponseClosed()) return false;
+
+            try {
+                op();
+                return !isResponseClosed();
+            } catch (err) {
+                if (
+                    err?.message?.includes(
+                        'uWS.HttpResponse must not be accessed after uWS.HttpResponse.onAborted callback',
+                    )
+                ) {
+                    onAborted();
+                    return false;
+                }
+
+                throw err;
+            }
+        };
+
+        let firstChunk;
+
+        try {
+            firstChunk = await nextChunk();
+        } catch (err) {
+            // if occurs before the first yield
+            cleanupListeners();
+            handleError(req, res, err);
+            return;
+        }
+
+        if (res.sent) {
+            cleanupListeners();
+            return;
+        }
+
+        if (firstChunk.done) {
+            cleanupListeners();
+
+            if (firstChunk.value !== undefined && !isResponseClosed()) {
+                res.send(firstChunk.value);
+            }
+
+            return;
+        }
+
+        writeIfOpen(() => {
+            const headers: OutgoingHttpHeaders = {};
+
+            for (const [key, value] of Object.entries(res.getHeaders())) {
+                if (value === undefined) continue;
+                headers[key] = Array.isArray(value) ? value.map(String) : String(value);
+            }
+
+            headers['Content-Type'] = 'text/event-stream';
+            headers['Cache-Control'] = 'no-cache';
+            headers.Connection = 'keep-alive';
+
+            res.raw.writeHead(200, headers);
+            if (res.raw.flushHeaders) res.raw.flushHeaders();
+        });
+
+        try {
+            writeIfOpen(() => {
+                res.raw.write(formatSSE(firstChunk.value));
+            });
+
+            while (true) {
+                if (isResponseClosed()) break;
+                const chunk = await nextChunk();
+
+                if (chunk.done || isResponseClosed()) break;
+
+                writeIfOpen(() => {
+                    res.raw.write(formatSSE(chunk.value));
+                });
+            }
+        } catch (err: any) {
+            if (!aborted) {
+                error(
+                    'Error while streaming response for ' +
+                        route.method.toUpperCase() +
+                        ':' +
+                        route.url +
+                        ' - ' +
+                        err.message,
+                    'SSE',
+                );
+            }
+        } finally {
+            cleanupListeners();
+
+            if (isResponseClosed()) {
+                closeIterator();
+            } else {
+                writeIfOpen(() => {
                     res.raw.end();
                 });
             }
@@ -528,7 +601,9 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
         const isAsyncIterable = result && typeof result[Symbol.asyncIterator] === 'function';
 
         if (isIterable || isAsyncIterable) {
-            streamResult(req, res, result, isAsyncIterable);
+            streamResult(req, res, result, isAsyncIterable).catch((err) => {
+                handleError(req, res, err);
+            });
             return;
         }
 
