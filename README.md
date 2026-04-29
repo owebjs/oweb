@@ -379,16 +379,16 @@ export default class SseRoute extends Route {
             return res.status(401).send({ code: 'error.unauthorized' });
         }
 
-        yield 'event-1';
-        await delay(20);
-
-        yield { step: 2 };
-        await delay(20);
-
-        yield 3;
+        while (!req.signal.aborted) {
+            yield { time: Date.now() };
+            await delay(1000, undefined, { signal: req.signal });
+        }
     }
 }
 ```
+
+`req.signal` is aborted when the client connection closes, so long-running SSE routes
+can stop loops and cancel abortable work cleanly.
 
 This is useful for live feeds, progress updates, and long-running operations.
 

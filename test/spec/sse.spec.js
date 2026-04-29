@@ -72,3 +72,47 @@ describe('SSE streaming', () => {
         });
     });
 });
+
+describe.each([
+    { name: 'uwebsocket', uWebSocketsEnabled: true },
+    { name: 'fastify', uWebSocketsEnabled: false },
+])('SSE cancellation signal ($name)', ({ uWebSocketsEnabled }) => {
+    let server;
+
+    beforeAll(async () => {
+        server = await createTestApp({ uWebSocketsEnabled });
+    });
+
+    afterAll(async () => {
+        if (server?.close) await server.close();
+    });
+
+    it('aborts req.signal when the client cancels the SSE response', async () => {
+        await requestJson(server.baseUrl, '/events/abort-state?reset=1');
+
+        const { response, events } = await collectSseEvents(`${server.baseUrl}/events/signal`, 1);
+
+        expect(response.status).toBe(200);
+        expect(events).toEqual(['signal-listening']);
+
+        await waitFor(async () => {
+            const { body } = await requestJson(server.baseUrl, '/events/abort-state');
+            expect(body.signal).toBeGreaterThanOrEqual(1);
+            return true;
+        });
+    });
+
+    it('does not abort req.signal for a completed response', async () => {
+        await requestJson(server.baseUrl, '/events/abort-state?reset=1');
+
+        const { response, body } = await requestJson(server.baseUrl, '/events/signal-normal');
+
+        expect(response.status).toBe(200);
+        expect(body).toEqual({ aborted: false });
+
+        await new Promise((resolve) => setTimeout(resolve, 100));
+
+        const { body: state } = await requestJson(server.baseUrl, '/events/abort-state');
+        expect(state.signal).toBe(0);
+    });
+});

@@ -29,6 +29,11 @@ type RuntimeState = {
     websocketRoutes: Record<string, WebSocketRoute>;
 };
 
+type RequestWithCancellation = FastifyRequest & {
+    signal?: AbortSignal;
+    _owebAbortController?: AbortController;
+};
+
 const runtimeStates = new WeakMap<Oweb, RuntimeState>();
 
 const createMethodMap = (): MethodHandlerMap => ({
@@ -421,6 +426,34 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
         }
     };
 
+    const ensureRequestSignal = (req: FastifyRequest, res: FastifyReply) => {
+        const request = req as RequestWithCancellation;
+
+        if (request._owebAbortController) return request._owebAbortController.signal;
+
+        const controller = new AbortController();
+        const raw = res.raw as any;
+        const abort = () => {
+            if (!controller.signal.aborted) controller.abort();
+        };
+        const abortIfInterrupted = () => {
+            if (raw.writableEnded || (raw.finished && !raw.res?.aborted)) return;
+            abort();
+        };
+
+        Object.defineProperty(request, 'signal', {
+            value: controller.signal,
+            configurable: true,
+        });
+
+        request._owebAbortController = controller;
+
+        res.raw.on?.('close', abortIfInterrupted);
+        res.raw.on?.('aborted', abort);
+
+        return controller.signal;
+    };
+
     const streamResult = async (
         req: FastifyRequest,
         res: FastifyReply,
@@ -434,7 +467,8 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
             ? result[Symbol.asyncIterator]()
             : result[Symbol.iterator]();
 
-        let aborted = false;
+        const signal = ensureRequestSignal(req, res);
+        let aborted = signal.aborted;
         let resolveAbort: ((value: IteratorResult<any>) => void) | undefined;
         let iteratorReturnCalled = false;
 
@@ -455,23 +489,15 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
             if (aborted) return;
             aborted = true;
             resolveAbort?.(abortedResult);
-            closeIterator();
+            queueMicrotask(closeIterator);
         };
+
+        signal.addEventListener('abort', onAborted, { once: true });
 
         const rawObj = res.raw as any;
 
-        if (res.raw.on) {
-            res.raw.on('close', onAborted);
-            res.raw.on('aborted', onAborted);
-        } else if (rawObj['onAborted']) {
-            rawObj['onAborted'](onAborted);
-        }
-
         const cleanupListeners = () => {
-            if (res.raw.off) {
-                res.raw.off('close', onAborted);
-                res.raw.off('aborted', onAborted);
-            }
+            signal.removeEventListener('abort', onAborted);
         };
 
         const isResponseClosed = () =>
@@ -649,6 +675,7 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
 
     if (isSimpleRoute) {
         return function (req: FastifyRequest, res: FastifyReply) {
+            ensureRequestSignal(req, res);
             executeRoute(req, res);
         };
     }
@@ -690,6 +717,8 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
     };
 
     return function (req: FastifyRequest, res: FastifyReply) {
+        ensureRequestSignal(req, res);
+
         if (hmrEnabled && isParametric) {
             const currentPath = req.raw.url.split('?')[0];
             const method = req.method.toLowerCase();
