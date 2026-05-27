@@ -635,6 +635,22 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
         return controller.signal;
     };
 
+    const bindRequestSignal = (req: FastifyRequest, res: FastifyReply) => {
+        const request = req as RequestWithCancellation;
+
+        if (request._owebAbortController) return;
+
+        const signalDescriptor = Object.getOwnPropertyDescriptor(request, 'signal');
+        if (signalDescriptor) return;
+
+        Object.defineProperty(request, 'signal', {
+            configurable: true,
+            get() {
+                return ensureRequestSignal(req, res);
+            },
+        });
+    };
+
     const streamResult = async (
         req: FastifyRequest,
         res: FastifyReply,
@@ -852,13 +868,47 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
               finalizeResult(req, res, result);
           };
 
-    const isSimpleRoute = !hmrEnabled && !hasHooks && !hasMatchers && !isParametric;
+    const executeSimpleRoute = handleIsAsync
+        ? async (req: FastifyRequest, res: FastifyReply) => {
+              bindRequestSignal(req, res);
+
+              try {
+                  const result = await routeFunc.handle(req, res);
+                  finalizeResult(req, res, result);
+              } catch (error) {
+                  handleError(req, res, error);
+              }
+          }
+        : (req: FastifyRequest, res: FastifyReply) => {
+              bindRequestSignal(req, res);
+
+              let result;
+
+              try {
+                  result = routeFunc.handle(req, res);
+              } catch (error) {
+                  handleError(req, res, error);
+                  return;
+              }
+
+              if (result instanceof Promise) {
+                  result
+                      .then((resolved) => {
+                          finalizeResult(req, res, resolved);
+                      })
+                      .catch((error) => {
+                          handleError(req, res, error);
+                      });
+                  return;
+              }
+
+              finalizeResult(req, res, result);
+          };
+
+    const isSimpleRoute = !hasHooks && !hasMatchers && !(hmrEnabled && isParametric);
 
     if (isSimpleRoute) {
-        return function (req: FastifyRequest, res: FastifyReply) {
-            ensureRequestSignal(req, res);
-            executeRoute(req, res);
-        };
+        return executeSimpleRoute;
     }
 
     const runHooks = (req: FastifyRequest, res: FastifyReply) => {
@@ -898,7 +948,7 @@ function inner(oweb: Oweb, route: GeneratedRoute) {
     };
 
     return function (req: FastifyRequest, res: FastifyReply) {
-        ensureRequestSignal(req, res);
+        bindRequestSignal(req, res);
 
         if (hmrEnabled && isParametric) {
             const currentPath = req.raw.url.split('?')[0];
