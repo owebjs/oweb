@@ -9,9 +9,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const MODULE_EXTENSIONS = ['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts'];
+const MONGOOSE_HMR_PATCH_KEY = Symbol.for('oweb:hmr:mongoose-patch');
 
 type TsConfig = {
     baseUrl: string;
+    outDir?: string;
     paths: Record<string, string[]>;
 };
 
@@ -31,6 +33,11 @@ function parseModule(source: string) {
         sourceType: 'module',
         plugins: ['importAttributes'],
     });
+}
+
+function traverseModule(ast: t.File, visitors: traverse.Visitor) {
+    const traverseFunction = (traverse as any).default ?? traverse;
+    traverseFunction(ast, visitors);
 }
 
 function generateModule(ast: t.File) {
@@ -89,12 +96,31 @@ async function getTsConfig() {
 
     return {
         baseUrl: path.resolve(path.dirname(tsConfigPath), compilerOptions.baseUrl || '.'),
+        outDir: compilerOptions.outDir
+            ? path.resolve(path.dirname(tsConfigPath), compilerOptions.outDir)
+            : undefined,
         paths: compilerOptions.paths || {},
     } satisfies TsConfig;
 }
 
 function escapeRegExp(value: string) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function getAliasTargetCandidates(targetPath: string, tsConfig: TsConfig) {
+    const candidates = [path.resolve(tsConfig.baseUrl, targetPath)];
+
+    if (!tsConfig.outDir) return candidates;
+
+    const normalizedTargetPath = targetPath.replaceAll('\\', '/');
+
+    if (normalizedTargetPath.startsWith('src/')) {
+        candidates.push(path.resolve(tsConfig.outDir, normalizedTargetPath.slice('src/'.length)));
+    } else if (!normalizedTargetPath.startsWith('dist/')) {
+        candidates.push(path.resolve(tsConfig.outDir, normalizedTargetPath));
+    }
+
+    return candidates;
 }
 
 function resolveAliasModule(specifier: string, tsConfig: TsConfig | null) {
@@ -112,9 +138,12 @@ function resolveAliasModule(specifier: string, tsConfig: TsConfig | null) {
 
         for (const target of targets) {
             const targetPath = target.includes('*') ? target.replace('*', rest) : target;
-            const resolvedPath = resolveExistingPath(path.resolve(tsConfig.baseUrl, targetPath));
 
-            if (resolvedPath) return resolvedPath;
+            for (const candidate of getAliasTargetCandidates(targetPath, tsConfig)) {
+                const resolvedPath = resolveExistingPath(candidate);
+
+                if (resolvedPath) return resolvedPath;
+            }
         }
     }
 
@@ -133,7 +162,7 @@ function getStaticImportSources(source: string) {
     const ast = parseModule(source);
     const sources = new Set<string>();
 
-    traverse.default(ast, {
+    traverseModule(ast, {
         ImportDeclaration(astPath: NodePath<t.ImportDeclaration>) {
             sources.add(astPath.node.source.value);
         },
@@ -151,6 +180,49 @@ function getStaticImportSources(source: string) {
 async function readJavaScript(filePath: string, source?: string) {
     const rawSource = source ?? (await readFile(filePath, 'utf-8'));
     return toJavaScript(rawSource, filePath);
+}
+
+async function patchMongooseForHMR(tempDir: string) {
+    const patchModulePath = path.join(tempDir, 'mongoose-hmr-patch.mjs');
+    const patchModuleUrl = pathToFileURL(patchModulePath).href;
+
+    try {
+        await writeFile(
+            patchModulePath,
+            `
+import mongooseDefault, * as mongooseNamespace from 'mongoose';
+
+const mongoose = mongooseDefault ?? mongooseNamespace.default ?? mongooseNamespace;
+const patchKey = Symbol.for('oweb:hmr:mongoose-patch');
+
+function patchModelHost(host) {
+    if (!host?.model || host[patchKey]) return;
+
+    const originalModel = host.model;
+
+    host.model = function (name, ...args) {
+        const models = this?.models ?? mongoose.models;
+
+        if (args.length > 0 && models?.[name]) {
+            return models[name];
+        }
+
+        return originalModel.call(this, name, ...args);
+    };
+
+    Object.defineProperty(host, patchKey, {
+        value: true,
+    });
+}
+
+patchModelHost(mongoose);
+patchModelHost(mongoose.Connection?.prototype);
+`,
+            'utf-8',
+        );
+
+        await import(patchModuleUrl);
+    } catch {}
 }
 
 export async function collectLocalDependencies(filePath: string, source?: string) {
@@ -233,7 +305,7 @@ async function createCacheBustedModuleUrl(
         );
     }
 
-    traverse.default(ast, {
+    traverseModule(ast, {
         ImportDeclaration(astPath: NodePath<t.ImportDeclaration>) {
             const replacement = replacements.get(astPath.node.source.value);
             if (replacement) astPath.node.source.value = replacement;
@@ -274,6 +346,8 @@ export async function importFreshModule(filePath: string, source?: string) {
             new Map(),
             new Set(),
         );
+
+        await patchMongooseForHMR(tempDir);
 
         return await import(moduleUrl);
     } finally {

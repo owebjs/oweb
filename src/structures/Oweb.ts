@@ -11,6 +11,7 @@ import {
     applyMatcherHMR,
     applyRouteHMR,
     assignRoutes,
+    setRouteHMRDirectories,
     setRouteHMRWatcher,
 } from '../utils/assignRoutes';
 import { watchDirectory } from '../utils/watcher';
@@ -241,6 +242,7 @@ export class Oweb extends _FastifyInstance {
             this.hmrDirectory = hmr.directory;
             this.hmrMatchersDirectory = hmr.matchersDirectory;
             this._internalKV.set('hmr', true);
+            setRouteHMRDirectories(this, this.hmrDirectory, this.directory);
             success(`Hot Module Replacement enabled. Watching changes in ${hmr.directory}`, 'HMR');
         } else {
             this._internalKV.set('hmr', false);

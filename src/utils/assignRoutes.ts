@@ -9,7 +9,7 @@ import { HMROperations } from './watcher';
 import { error, success, warn } from './logger';
 import { match } from 'path-to-regexp';
 import generateFunctionFromTypescript from './generateFunctionFromTypescript';
-import { readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import type { FSWatcher } from 'chokidar';
 import { collectLocalDependencies, importFreshModule } from './hmrModuleLoader';
 
@@ -20,6 +20,8 @@ import { formatSSE } from './utils';
 
 const WS_REGISTRY_KEY = 'ws:registered-routes';
 const HMR_ROUTE_WATCHER_KEY = 'hmr:route-watcher';
+const HMR_SOURCE_DIRECTORY_KEY = 'hmr:source-directory';
+const HMR_RUNTIME_DIRECTORY_KEY = 'hmr:runtime-directory';
 
 type MethodHandlerMap = Record<string, Record<string, Function>>;
 
@@ -104,8 +106,56 @@ function removeExtension(filePath: string) {
     return filePath;
 }
 
-async function refreshRouteDependencies(state: RuntimeState, routeFilePath: string, source?: string) {
-    const routeKey = normalizeFsPath(routeFilePath);
+const ROUTE_SOURCE_EXTENSIONS = ['.ts', '.js', '.mts', '.mjs', '.cts', '.cjs'];
+
+function isFile(filePath: string) {
+    try {
+        return existsSync(filePath) && statSync(filePath).isFile();
+    } catch {
+        return false;
+    }
+}
+
+function resolveRouteSourcePath(oweb: Oweb, routeFilePath: string) {
+    const sourceDirectory = oweb._internalKV.get(HMR_SOURCE_DIRECTORY_KEY) as string | undefined;
+    const runtimeDirectory = oweb._internalKV.get(HMR_RUNTIME_DIRECTORY_KEY) as string | undefined;
+
+    if (!sourceDirectory || !runtimeDirectory) return routeFilePath;
+
+    const absoluteRoutePath = path.resolve(routeFilePath);
+    const absoluteSourceDirectory = path.resolve(sourceDirectory);
+    const absoluteRuntimeDirectory = path.resolve(runtimeDirectory);
+
+    if (!path.relative(absoluteSourceDirectory, absoluteRoutePath).startsWith('..')) {
+        return routeFilePath;
+    }
+
+    const relativeRoutePath = path.relative(absoluteRuntimeDirectory, absoluteRoutePath);
+
+    if (relativeRoutePath.startsWith('..')) return routeFilePath;
+
+    const sourceCandidate = path.join(absoluteSourceDirectory, relativeRoutePath);
+
+    if (isFile(sourceCandidate)) return sourceCandidate;
+
+    const ext = path.extname(sourceCandidate);
+    const withoutExt = ext ? sourceCandidate.slice(0, -ext.length) : sourceCandidate;
+
+    for (const sourceExt of ROUTE_SOURCE_EXTENSIONS) {
+        const candidate = withoutExt + sourceExt;
+        if (isFile(candidate)) return candidate;
+    }
+
+    return routeFilePath;
+}
+
+async function refreshRouteDependencies(
+    oweb: Oweb,
+    state: RuntimeState,
+    route: GeneratedRoute,
+    source?: string,
+) {
+    const routeKey = normalizeFsPath(route.fileInfo.filePath);
     const previousDependencies = state.routeDependencies.get(routeKey);
 
     if (previousDependencies) {
@@ -116,7 +166,8 @@ async function refreshRouteDependencies(state: RuntimeState, routeFilePath: stri
         }
     }
 
-    const dependencies = await collectLocalDependencies(routeFilePath, source);
+    const dependencyEntryPath = resolveRouteSourcePath(oweb, route.fileInfo.filePath);
+    const dependencies = await collectLocalDependencies(dependencyEntryPath, source);
     const nextDependencies = new Set<string>();
 
     for (const dependencyPath of dependencies) {
@@ -140,6 +191,11 @@ function getRouteByPath(state: RuntimeState, filePath: string) {
     const routeKey = normalizeFsPath(filePath);
 
     return state.routesCache.find((route) => normalizeFsPath(route.fileInfo.filePath) === routeKey);
+}
+
+export function setRouteHMRDirectories(oweb: Oweb, sourceDirectory: string, runtimeDirectory: string) {
+    oweb._internalKV.set(HMR_SOURCE_DIRECTORY_KEY, sourceDirectory);
+    oweb._internalKV.set(HMR_RUNTIME_DIRECTORY_KEY, runtimeDirectory);
 }
 
 export function watchRouteDependencies(oweb: Oweb, watcher?: FSWatcher) {
@@ -240,13 +296,14 @@ async function reloadGeneratedRoute(
     preferTemporary = false,
 ) {
     const state = getRuntimeState(oweb);
-    const fresh = await importFreshModule(route.fileInfo.filePath, source);
+    const routeSourcePath = resolveRouteSourcePath(oweb, route.fileInfo.filePath);
+    const fresh = await importFreshModule(routeSourcePath, source);
 
     if (fresh?.default) {
         route.fn = fresh.default;
     }
 
-    await refreshRouteDependencies(state, route.fileInfo.filePath, source);
+    await refreshRouteDependencies(oweb, state, route, source);
     watchRouteDependencies(oweb);
 
     if (route.fn?.prototype instanceof WebSocketRoute) {
@@ -278,6 +335,8 @@ async function reloadRoutesAffectedByDependency(oweb: Oweb, filePath: string) {
     const start = Date.now();
 
     const routeKeys = Array.from(affectedRouteKeys);
+    let reloadedCount = 0;
+    let failedCount = 0;
 
     for (const routeKey of routeKeys) {
         const route = state.routesCache.find(
@@ -288,13 +347,23 @@ async function reloadRoutesAffectedByDependency(oweb: Oweb, filePath: string) {
 
         try {
             await reloadGeneratedRoute(oweb, route);
+            reloadedCount++;
         } catch (err: any) {
+            failedCount++;
             warn(`Route ${route.fileInfo.filePath} could not reload: ${err.message}`, 'HMR');
         }
     }
 
     const end = Date.now() - start;
-    success(`${routeKeys.length} route(s) reloaded after ${filePath} changed in ${end}ms`, 'HMR');
+
+    if (failedCount > 0) {
+        warn(
+            `${routeKeys.length} route(s) affected after ${filePath} changed: ${reloadedCount} reloaded, ${failedCount} failed in ${end}ms`,
+            'HMR',
+        );
+    } else {
+        success(`${reloadedCount} route(s) reloaded after ${filePath} changed in ${end}ms`, 'HMR');
+    }
 
     return true;
 }
@@ -1071,7 +1140,7 @@ export const assignRoutes = async (oweb: Oweb, directory: string, matchersDirect
     state.routesCache = routes;
 
     await Promise.all(
-        routes.map((route) => refreshRouteDependencies(state, route.fileInfo.filePath)),
+        routes.map((route) => refreshRouteDependencies(oweb, state, route)),
     );
     watchRouteDependencies(oweb);
 

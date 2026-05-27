@@ -11,6 +11,8 @@ const ROUTES_DIR = path.join(FIXTURE_ROOT, 'routes');
 const MATCHERS_DIR = path.join(FIXTURE_ROOT, 'matchers');
 const LIVE_ROUTE_FILE = path.join(ROUTES_DIR, 'hmr', 'live.js');
 const HMR_VERSION_FILE = path.join(FIXTURE_ROOT, 'hmr-version.js');
+const SPLIT_RUNTIME_DIR = path.join(FIXTURE_ROOT, 'split-runtime');
+const SPLIT_VERSION_FILE = path.join(SPLIT_RUNTIME_DIR, 'src', 'split-version.js');
 
 describe('HMR integration', () => {
     let server;
@@ -91,5 +93,48 @@ export default class HmrLiveRoute extends Route {
 
         const second = await requestJson(server.baseUrl, '/hmr/dependency-live');
         expect(second.body).toEqual({ message: 'helper-v2' });
+    });
+});
+
+describe('HMR with separate runtime and source directories', () => {
+    let server;
+    let originalVersionContent;
+
+    beforeAll(async () => {
+        originalVersionContent = await readFile(SPLIT_VERSION_FILE, 'utf-8');
+
+        server = await createTestApp({
+            routesDir: path.join(SPLIT_RUNTIME_DIR, 'dist', 'routes'),
+            matchersDir: MATCHERS_DIR,
+            hmrRoutesDir: path.join(SPLIT_RUNTIME_DIR, 'src', 'routes'),
+            hmrMatchersDir: MATCHERS_DIR,
+            hmr: true,
+        });
+    });
+
+    afterAll(async () => {
+        if (originalVersionContent) {
+            await writeFile(SPLIT_VERSION_FILE, originalVersionContent, 'utf-8');
+        }
+
+        if (server?.close) await server.close();
+    });
+
+    it('tracks dependencies from the source route while serving the runtime route', async () => {
+        const first = await requestJson(server.baseUrl, '/hmr/source-dependency');
+        expect(first.response.status).toBe(200);
+        expect(first.body).toEqual({ message: 'helper-v1' });
+
+        await new Promise((resolve) => setTimeout(resolve, 600));
+
+        await writeFile(SPLIT_VERSION_FILE, `export const splitVersion = 'v2';\n`, 'utf-8');
+
+        await waitFor(
+            async () => {
+                const current = await requestJson(server.baseUrl, '/hmr/source-dependency');
+                return current.body?.message === 'helper-v2';
+            },
+            { timeoutMs: 10000, intervalMs: 160 },
+        );
     });
 });

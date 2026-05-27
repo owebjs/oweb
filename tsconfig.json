@@ -16,7 +16,8 @@
         "noEmitHelpers": true,
         "baseUrl": ".",
         "paths": {
-            "@fixtures/*": ["test/fixtures/*"]
+            "@fixtures/*": ["test/fixtures/*"],
+            "@split/*": ["test/fixtures/split-runtime/src/*"]
         },
         "noFallthroughCasesInSwitch": true,
         "noImplicitReturns": true,

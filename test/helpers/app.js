@@ -34,6 +34,8 @@ export async function createTestApp({
     registerMultipart = false,
     routesDir = path.join(FIXTURE_ROOT, 'routes'),
     matchersDir = path.join(FIXTURE_ROOT, 'matchers'),
+    hmrRoutesDir = routesDir,
+    hmrMatchersDir = matchersDir,
     hmr = false,
     internalErrorHandler,
 } = {}) {
@@ -69,8 +71,8 @@ export async function createTestApp({
     if (hmr) {
         loadRoutesOptions.hmr = {
             enabled: true,
-            directory: routesDir,
-            matchersDirectory: matchersDir,
+            directory: hmrRoutesDir,
+            matchersDirectory: hmrMatchersDir,
         };
     }
 
