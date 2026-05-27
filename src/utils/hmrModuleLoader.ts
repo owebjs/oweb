@@ -9,12 +9,20 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const MODULE_EXTENSIONS = ['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts'];
-const MONGOOSE_HMR_PATCH_KEY = Symbol.for('oweb:hmr:mongoose-patch');
 
 type TsConfig = {
     baseUrl: string;
     outDir?: string;
     paths: Record<string, string[]>;
+};
+
+export type HMRModuleLoaderSession = {
+    version: string;
+    tempDir: string;
+    tsConfig: TsConfig | null;
+    moduleCache: Map<string, string>;
+    dependencyCache: Map<string, Set<string>>;
+    mongoosePatched: boolean;
 };
 
 function toJavaScript(source: string, filePath: string) {
@@ -225,28 +233,73 @@ patchModelHost(mongoose.Connection?.prototype);
     } catch {}
 }
 
-export async function collectLocalDependencies(filePath: string, source?: string) {
+export async function createHMRModuleLoaderSession() {
+    const version = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const tempDir = await mkdtemp(path.join(process.cwd(), '.oweb-hmr-'));
+
+    await mkdir(tempDir, { recursive: true });
+
+    return {
+        version,
+        tempDir,
+        tsConfig: await getTsConfig(),
+        moduleCache: new Map(),
+        dependencyCache: new Map(),
+        mongoosePatched: false,
+    } satisfies HMRModuleLoaderSession;
+}
+
+export async function disposeHMRModuleLoaderSession(session: HMRModuleLoaderSession) {
+    await rm(session.tempDir, { recursive: true, force: true }).catch(() => {});
+}
+
+export async function collectLocalDependencies(
+    filePath: string,
+    source?: string,
+    session?: HMRModuleLoaderSession,
+) {
     const dependencies = new Set<string>();
     const visited = new Set<string>();
-    const tsConfig = await getTsConfig();
+    const tsConfig = session?.tsConfig ?? (await getTsConfig());
 
     async function visit(currentPath: string, currentSource?: string) {
         const resolvedPath = path.resolve(currentPath);
         const key = resolvedPath.toLowerCase();
 
-        if (visited.has(key)) return;
+        if (visited.has(key)) return new Set<string>();
         visited.add(key);
+
+        if (!currentSource && session?.dependencyCache.has(key)) {
+            const cachedDependencies = session.dependencyCache.get(key)!;
+            for (const dependencyPath of cachedDependencies) {
+                dependencies.add(dependencyPath);
+            }
+            return cachedDependencies;
+        }
 
         const jsSource = await readJavaScript(resolvedPath, currentSource);
         const importSources = getStaticImportSources(jsSource);
+        const subtreeDependencies = new Set<string>();
 
         for (const importSource of importSources) {
             const dependencyPath = resolveImportModule(importSource, resolvedPath, tsConfig);
             if (!dependencyPath) continue;
 
-            dependencies.add(path.resolve(dependencyPath));
-            await visit(dependencyPath);
+            const absoluteDependencyPath = path.resolve(dependencyPath);
+            subtreeDependencies.add(absoluteDependencyPath);
+            dependencies.add(absoluteDependencyPath);
+
+            const childDependencies = await visit(dependencyPath);
+            for (const childDependency of childDependencies) {
+                subtreeDependencies.add(childDependency);
+            }
         }
+
+        if (!currentSource && session) {
+            session.dependencyCache.set(key, subtreeDependencies);
+        }
+
+        return subtreeDependencies;
     }
 
     await visit(filePath, source);
@@ -262,20 +315,17 @@ function getTempModulePath(tempDir: string, filePath: string, index: number) {
 async function createCacheBustedModuleUrl(
     filePath: string,
     source: string | undefined,
-    version: string,
-    tempDir: string,
-    tsConfig: TsConfig | null,
-    cache: Map<string, string>,
+    session: HMRModuleLoaderSession,
     stack: Set<string>,
 ) {
     const resolvedPath = path.resolve(filePath);
     const key = resolvedPath.toLowerCase();
 
-    if (cache.has(key)) return cache.get(key)!;
+    if (session.moduleCache.has(key)) return session.moduleCache.get(key)!;
 
-    const tempModulePath = getTempModulePath(tempDir, resolvedPath, cache.size);
+    const tempModulePath = getTempModulePath(session.tempDir, resolvedPath, session.moduleCache.size);
     const moduleUrl = pathToFileURL(tempModulePath).href;
-    cache.set(key, moduleUrl);
+    session.moduleCache.set(key, moduleUrl);
 
     if (stack.has(key)) {
         return moduleUrl;
@@ -288,7 +338,7 @@ async function createCacheBustedModuleUrl(
     const replacements = new Map<string, string>();
 
     for (const importSource of getStaticImportSources(jsSource)) {
-        const dependencyPath = resolveImportModule(importSource, resolvedPath, tsConfig);
+        const dependencyPath = resolveImportModule(importSource, resolvedPath, session.tsConfig);
         if (!dependencyPath) continue;
 
         replacements.set(
@@ -296,10 +346,7 @@ async function createCacheBustedModuleUrl(
             await createCacheBustedModuleUrl(
                 dependencyPath,
                 undefined,
-                version,
-                tempDir,
-                tsConfig,
-                cache,
+                session,
                 stack,
             ),
         );
@@ -323,34 +370,38 @@ async function createCacheBustedModuleUrl(
         },
     });
 
-    const code = `${generateModule(ast)}\n//# sourceURL=${pathToFileURL(resolvedPath).href}?t=${version}`;
+    const code = `${generateModule(ast)}\n//# sourceURL=${pathToFileURL(resolvedPath).href}?t=${session.version}`;
     await writeFile(tempModulePath, code, 'utf-8');
     stack.delete(key);
 
     return moduleUrl;
 }
 
-export async function importFreshModule(filePath: string, source?: string) {
-    const version = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const tempDir = await mkdtemp(path.join(process.cwd(), '.oweb-hmr-'));
-    const tsConfig = await getTsConfig();
+export async function importFreshModule(
+    filePath: string,
+    source?: string,
+    session?: HMRModuleLoaderSession,
+) {
+    const ownsSession = !session;
+    const loaderSession = session ?? (await createHMRModuleLoaderSession());
 
     try {
-        await mkdir(tempDir, { recursive: true });
         const moduleUrl = await createCacheBustedModuleUrl(
             filePath,
             source,
-            version,
-            tempDir,
-            tsConfig,
-            new Map(),
+            loaderSession,
             new Set(),
         );
 
-        await patchMongooseForHMR(tempDir);
+        if (!loaderSession.mongoosePatched) {
+            await patchMongooseForHMR(loaderSession.tempDir);
+            loaderSession.mongoosePatched = true;
+        }
 
         return await import(moduleUrl);
     } finally {
-        await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+        if (ownsSession) {
+            await disposeHMRModuleLoaderSession(loaderSession);
+        }
     }
 }

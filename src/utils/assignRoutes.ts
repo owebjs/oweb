@@ -11,7 +11,13 @@ import { match } from 'path-to-regexp';
 import generateFunctionFromTypescript from './generateFunctionFromTypescript';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import type { FSWatcher } from 'chokidar';
-import { collectLocalDependencies, importFreshModule } from './hmrModuleLoader';
+import {
+    collectLocalDependencies,
+    createHMRModuleLoaderSession,
+    disposeHMRModuleLoaderSession,
+    importFreshModule,
+    type HMRModuleLoaderSession,
+} from './hmrModuleLoader';
 
 import { WebSocketRoute, WebSocketAdapter } from '../structures/WebSocketRoute';
 import { FastifyWebSocketAdapter } from '../structures/FastifyWebSocketAdapter';
@@ -154,6 +160,7 @@ async function refreshRouteDependencies(
     state: RuntimeState,
     route: GeneratedRoute,
     source?: string,
+    loaderSession?: HMRModuleLoaderSession,
 ) {
     const routeKey = normalizeFsPath(route.fileInfo.filePath);
     const previousDependencies = state.routeDependencies.get(routeKey);
@@ -167,7 +174,7 @@ async function refreshRouteDependencies(
     }
 
     const dependencyEntryPath = resolveRouteSourcePath(oweb, route.fileInfo.filePath);
-    const dependencies = await collectLocalDependencies(dependencyEntryPath, source);
+    const dependencies = await collectLocalDependencies(dependencyEntryPath, source, loaderSession);
     const nextDependencies = new Set<string>();
 
     for (const dependencyPath of dependencies) {
@@ -294,16 +301,17 @@ async function reloadGeneratedRoute(
     route: GeneratedRoute,
     source?: string,
     preferTemporary = false,
+    loaderSession?: HMRModuleLoaderSession,
 ) {
     const state = getRuntimeState(oweb);
     const routeSourcePath = resolveRouteSourcePath(oweb, route.fileInfo.filePath);
-    const fresh = await importFreshModule(routeSourcePath, source);
+    const fresh = await importFreshModule(routeSourcePath, source, loaderSession);
 
     if (fresh?.default) {
         route.fn = fresh.default;
     }
 
-    await refreshRouteDependencies(oweb, state, route, source);
+    await refreshRouteDependencies(oweb, state, route, source, loaderSession);
     watchRouteDependencies(oweb);
 
     if (route.fn?.prototype instanceof WebSocketRoute) {
@@ -337,21 +345,26 @@ async function reloadRoutesAffectedByDependency(oweb: Oweb, filePath: string) {
     const routeKeys = Array.from(affectedRouteKeys);
     let reloadedCount = 0;
     let failedCount = 0;
+    const loaderSession = await createHMRModuleLoaderSession();
 
-    for (const routeKey of routeKeys) {
-        const route = state.routesCache.find(
-            (candidate) => normalizeFsPath(candidate.fileInfo.filePath) === routeKey,
-        );
+    try {
+        for (const routeKey of routeKeys) {
+            const route = state.routesCache.find(
+                (candidate) => normalizeFsPath(candidate.fileInfo.filePath) === routeKey,
+            );
 
-        if (!route) continue;
+            if (!route) continue;
 
-        try {
-            await reloadGeneratedRoute(oweb, route);
-            reloadedCount++;
-        } catch (err: any) {
-            failedCount++;
-            warn(`Route ${route.fileInfo.filePath} could not reload: ${err.message}`, 'HMR');
+            try {
+                await reloadGeneratedRoute(oweb, route, undefined, false, loaderSession);
+                reloadedCount++;
+            } catch (err: any) {
+                failedCount++;
+                warn(`Route ${route.fileInfo.filePath} could not reload: ${err.message}`, 'HMR');
+            }
         }
+    } finally {
+        await disposeHMRModuleLoaderSession(loaderSession);
     }
 
     const end = Date.now() - start;
@@ -1139,9 +1152,14 @@ export const assignRoutes = async (oweb: Oweb, directory: string, matchersDirect
 
     state.routesCache = routes;
 
-    await Promise.all(
-        routes.map((route) => refreshRouteDependencies(oweb, state, route)),
-    );
+    const loaderSession = await createHMRModuleLoaderSession();
+    try {
+        await Promise.all(
+            routes.map((route) => refreshRouteDependencies(oweb, state, route, undefined, loaderSession)),
+        );
+    } finally {
+        await disposeHMRModuleLoaderSession(loaderSession);
+    }
     watchRouteDependencies(oweb);
 
     function fallbackHandle(req: FastifyRequest, res: FastifyReply) {
