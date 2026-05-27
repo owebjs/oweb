@@ -76,7 +76,7 @@ function getStaticImportSources(source: string) {
     const ast = parseModule(source);
     const sources = new Set<string>();
 
-    traverse(ast, {
+    traverse.default(ast, {
         ImportDeclaration(astPath: NodePath<t.ImportDeclaration>) {
             sources.add(astPath.node.source.value);
         },
@@ -173,7 +173,7 @@ async function createCacheBustedModuleUrl(
         );
     }
 
-    traverse(ast, {
+    traverse.default(ast, {
         ImportDeclaration(astPath: NodePath<t.ImportDeclaration>) {
             const replacement = replacements.get(astPath.node.source.value);
             if (replacement) astPath.node.source.value = replacement;
