@@ -14,6 +14,10 @@
         "moduleResolution": "Bundler",
         "newLine": "lf",
         "noEmitHelpers": true,
+        "baseUrl": ".",
+        "paths": {
+            "@fixtures/*": ["test/fixtures/*"]
+        },
         "noFallthroughCasesInSwitch": true,
         "noImplicitReturns": true,
         "preserveConstEnums": true,

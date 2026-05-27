@@ -5,11 +5,15 @@ import * as babel from '@babel/core';
 import * as t from '@babel/types';
 import { existsSync, statSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 const MODULE_EXTENSIONS = ['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts'];
+
+type TsConfig = {
+    baseUrl: string;
+    paths: Record<string, string[]>;
+};
 
 function toJavaScript(source: string, filePath: string) {
     if (!/\.(ts|mts|cts)$/.test(filePath)) return source;
@@ -27,6 +31,11 @@ function parseModule(source: string) {
         sourceType: 'module',
         plugins: ['importAttributes'],
     });
+}
+
+function generateModule(ast: t.File) {
+    const generateFunction = (generate as any).default ?? generate;
+    return generateFunction(ast).code;
 }
 
 function isFile(filePath: string) {
@@ -66,10 +75,58 @@ function resolveExistingPath(filePath: string) {
     return null;
 }
 
-function resolveLocalModule(specifier: string, importerPath: string) {
-    if (!specifier.startsWith('.')) return null;
+function stripJsonComments(source: string) {
+    return source.replace(/\/\*[\s\S]*?\*\/|\/\/.*/g, '');
+}
 
-    return resolveExistingPath(path.resolve(path.dirname(importerPath), specifier));
+async function getTsConfig() {
+    const tsConfigPath = path.join(process.cwd(), 'tsconfig.json');
+    if (!existsSync(tsConfigPath)) return null;
+
+    const tsConfigFile = await readFile(tsConfigPath, 'utf-8');
+    const json = JSON.parse(stripJsonComments(tsConfigFile));
+    const compilerOptions = json.compilerOptions || {};
+
+    return {
+        baseUrl: path.resolve(path.dirname(tsConfigPath), compilerOptions.baseUrl || '.'),
+        paths: compilerOptions.paths || {},
+    } satisfies TsConfig;
+}
+
+function escapeRegExp(value: string) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function resolveAliasModule(specifier: string, tsConfig: TsConfig | null) {
+    if (!tsConfig) return null;
+
+    for (const alias of Object.keys(tsConfig.paths)) {
+        const targets = tsConfig.paths[alias];
+        if (!targets?.length) continue;
+
+        const aliasPattern = new RegExp(`^${escapeRegExp(alias).replace('\\*', '(.*)')}$`);
+        const match = specifier.match(aliasPattern);
+        if (!match) continue;
+
+        const rest = match[1] || '';
+
+        for (const target of targets) {
+            const targetPath = target.includes('*') ? target.replace('*', rest) : target;
+            const resolvedPath = resolveExistingPath(path.resolve(tsConfig.baseUrl, targetPath));
+
+            if (resolvedPath) return resolvedPath;
+        }
+    }
+
+    return null;
+}
+
+function resolveImportModule(specifier: string, importerPath: string, tsConfig: TsConfig | null) {
+    if (specifier.startsWith('.')) {
+        return resolveExistingPath(path.resolve(path.dirname(importerPath), specifier));
+    }
+
+    return resolveAliasModule(specifier, tsConfig);
 }
 
 function getStaticImportSources(source: string) {
@@ -99,6 +156,7 @@ async function readJavaScript(filePath: string, source?: string) {
 export async function collectLocalDependencies(filePath: string, source?: string) {
     const dependencies = new Set<string>();
     const visited = new Set<string>();
+    const tsConfig = await getTsConfig();
 
     async function visit(currentPath: string, currentSource?: string) {
         const resolvedPath = path.resolve(currentPath);
@@ -111,7 +169,7 @@ export async function collectLocalDependencies(filePath: string, source?: string
         const importSources = getStaticImportSources(jsSource);
 
         for (const importSource of importSources) {
-            const dependencyPath = resolveLocalModule(importSource, resolvedPath);
+            const dependencyPath = resolveImportModule(importSource, resolvedPath, tsConfig);
             if (!dependencyPath) continue;
 
             dependencies.add(path.resolve(dependencyPath));
@@ -134,6 +192,7 @@ async function createCacheBustedModuleUrl(
     source: string | undefined,
     version: string,
     tempDir: string,
+    tsConfig: TsConfig | null,
     cache: Map<string, string>,
     stack: Set<string>,
 ) {
@@ -157,7 +216,7 @@ async function createCacheBustedModuleUrl(
     const replacements = new Map<string, string>();
 
     for (const importSource of getStaticImportSources(jsSource)) {
-        const dependencyPath = resolveLocalModule(importSource, resolvedPath);
+        const dependencyPath = resolveImportModule(importSource, resolvedPath, tsConfig);
         if (!dependencyPath) continue;
 
         replacements.set(
@@ -167,6 +226,7 @@ async function createCacheBustedModuleUrl(
                 undefined,
                 version,
                 tempDir,
+                tsConfig,
                 cache,
                 stack,
             ),
@@ -191,7 +251,7 @@ async function createCacheBustedModuleUrl(
         },
     });
 
-    const code = `${generate(ast).code}\n//# sourceURL=${pathToFileURL(resolvedPath).href}?t=${version}`;
+    const code = `${generateModule(ast)}\n//# sourceURL=${pathToFileURL(resolvedPath).href}?t=${version}`;
     await writeFile(tempModulePath, code, 'utf-8');
     stack.delete(key);
 
@@ -200,7 +260,8 @@ async function createCacheBustedModuleUrl(
 
 export async function importFreshModule(filePath: string, source?: string) {
     const version = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const tempDir = await mkdtemp(path.join(tmpdir(), 'oweb-hmr-'));
+    const tempDir = await mkdtemp(path.join(process.cwd(), '.oweb-hmr-'));
+    const tsConfig = await getTsConfig();
 
     try {
         await mkdir(tempDir, { recursive: true });
@@ -209,6 +270,7 @@ export async function importFreshModule(filePath: string, source?: string) {
             source,
             version,
             tempDir,
+            tsConfig,
             new Map(),
             new Set(),
         );
