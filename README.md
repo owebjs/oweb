@@ -496,6 +496,8 @@ export default class ChunkUploadRoute extends Route {
 
 Oweb supports `.ts` route files and exports framework typings. You can keep the same file conventions and class model in TypeScript projects.
 
+When your app starts, Oweb reads `.env` from the project root and generates `oweb-env.d.ts` with `process.env` autocomplete for the keys it finds. If HMR is enabled, Oweb also watches `.env` and regenerates those typings when it changes.
+
 ## License
 
 MIT

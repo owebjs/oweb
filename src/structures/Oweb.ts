@@ -15,6 +15,7 @@ import {
     setRouteHMRWatcher,
 } from '../utils/assignRoutes';
 import { watchDirectory } from '../utils/watcher';
+import { generateEnvTypes, watchEnvTypes } from '../utils/envTypes';
 import { info, success, warn } from '../utils/logger';
 
 import websocketPlugin from '@fastify/websocket';
@@ -107,6 +108,12 @@ export class Oweb extends _FastifyInstance {
      * Returns a fastify instance with the Oweb prototype methods
      */
     public async setup(): Promise<Oweb> {
+        try {
+            await generateEnvTypes();
+        } catch (error) {
+            warn(`Failed to generate environment typings: ${(error as Error).message}`, 'Env');
+        }
+
         if (this._options.uWebSocketsEnabled) {
             const serverimp = (await import('../uwebsocket/server.js')).default;
             const server = await serverimp({
@@ -264,6 +271,11 @@ export class Oweb extends _FastifyInstance {
         await this.closeHMRWatchers();
 
         const watchers = this.getHmrWatchers();
+
+        const envWatcher = watchEnvTypes(undefined, undefined, (error) => {
+            warn(`Failed to generate environment typings: ${error.message}`, 'Env');
+        });
+        watchers.push(envWatcher);
 
         const routeWatcher = watchDirectory(this.hmrDirectory, true, (op, path, content) => {
             applyRouteHMR(this, op, this.hmrDirectory, this.directory, path, content);
