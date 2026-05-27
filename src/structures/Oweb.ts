@@ -7,7 +7,12 @@ import Fastify, {
     type RawServerDefault,
 } from 'fastify';
 import type { FSWatcher } from 'chokidar';
-import { applyMatcherHMR, applyRouteHMR, assignRoutes } from '../utils/assignRoutes';
+import {
+    applyMatcherHMR,
+    applyRouteHMR,
+    assignRoutes,
+    setRouteHMRWatcher,
+} from '../utils/assignRoutes';
 import { watchDirectory } from '../utils/watcher';
 import { info, success, warn } from '../utils/logger';
 
@@ -261,6 +266,7 @@ export class Oweb extends _FastifyInstance {
         const routeWatcher = watchDirectory(this.hmrDirectory, true, (op, path, content) => {
             applyRouteHMR(this, op, this.hmrDirectory, this.directory, path, content);
         });
+        setRouteHMRWatcher(this, routeWatcher);
         watchers.push(routeWatcher);
 
         if (this.hmrMatchersDirectory) {

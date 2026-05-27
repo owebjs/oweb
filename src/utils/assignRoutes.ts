@@ -10,6 +10,8 @@ import { error, success, warn } from './logger';
 import { match } from 'path-to-regexp';
 import generateFunctionFromTypescript from './generateFunctionFromTypescript';
 import { readdirSync } from 'node:fs';
+import type { FSWatcher } from 'chokidar';
+import { collectLocalDependencies, importFreshModule } from './hmrModuleLoader';
 
 import { WebSocketRoute, WebSocketAdapter } from '../structures/WebSocketRoute';
 import { FastifyWebSocketAdapter } from '../structures/FastifyWebSocketAdapter';
@@ -17,6 +19,7 @@ import { FastifyWebSocketAdapter } from '../structures/FastifyWebSocketAdapter';
 import { formatSSE } from './utils';
 
 const WS_REGISTRY_KEY = 'ws:registered-routes';
+const HMR_ROUTE_WATCHER_KEY = 'hmr:route-watcher';
 
 type MethodHandlerMap = Record<string, Record<string, Function>>;
 
@@ -27,6 +30,9 @@ type RuntimeState = {
     routesCache: GeneratedRoute[];
     compiledRoutes: Record<string, new (...args: any[]) => Route>;
     websocketRoutes: Record<string, WebSocketRoute>;
+    routeDependencies: Map<string, Set<string>>;
+    dependencyRoutes: Map<string, Set<string>>;
+    dependencyFiles: Map<string, string>;
 };
 
 type RequestWithCancellation = FastifyRequest & {
@@ -53,6 +59,9 @@ function createRuntimeState(): RuntimeState {
         routesCache: [],
         compiledRoutes: {},
         websocketRoutes: {},
+        routeDependencies: new Map(),
+        dependencyRoutes: new Map(),
+        dependencyFiles: new Map(),
     };
 }
 
@@ -71,22 +80,6 @@ function normalizeFsPath(filePath: string) {
     return path.resolve(filePath).replaceAll('\\', '/').toLowerCase();
 }
 
-async function importFreshModule(filePath: string, source?: string) {
-    const resolvedHref = pathToFileURL(path.resolve(filePath)).href;
-    const cacheBuster = `?t=${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-    if (source?.length && !/['"]\.\.?\//.test(source)) {
-        const stampedSource = `${source}\n//# sourceURL=${resolvedHref}${cacheBuster}`;
-        const dataUrl = `data:text/javascript;base64,${Buffer.from(stampedSource, 'utf-8').toString('base64')}`;
-
-        try {
-            return await import(dataUrl);
-        } catch {}
-    }
-
-    return import(resolvedHref + cacheBuster);
-}
-
 function resetRuntimeCaches(oweb: Oweb) {
     const state = getRuntimeState(oweb);
 
@@ -96,6 +89,9 @@ function resetRuntimeCaches(oweb: Oweb) {
     state.routesCache = [];
     state.compiledRoutes = {};
     state.websocketRoutes = {};
+    state.routeDependencies.clear();
+    state.dependencyRoutes.clear();
+    state.dependencyFiles.clear();
 
     oweb._internalKV.delete(WS_REGISTRY_KEY);
 }
@@ -106,6 +102,58 @@ function removeExtension(filePath: string) {
         return filePath.substring(0, lastDotIndex);
     }
     return filePath;
+}
+
+async function refreshRouteDependencies(state: RuntimeState, routeFilePath: string, source?: string) {
+    const routeKey = normalizeFsPath(routeFilePath);
+    const previousDependencies = state.routeDependencies.get(routeKey);
+
+    if (previousDependencies) {
+        for (const dependencyKey of previousDependencies) {
+            const routes = state.dependencyRoutes.get(dependencyKey);
+            routes?.delete(routeKey);
+            if (!routes?.size) state.dependencyRoutes.delete(dependencyKey);
+        }
+    }
+
+    const dependencies = await collectLocalDependencies(routeFilePath, source);
+    const nextDependencies = new Set<string>();
+
+    for (const dependencyPath of dependencies) {
+        const dependencyKey = normalizeFsPath(dependencyPath);
+        nextDependencies.add(dependencyKey);
+        state.dependencyFiles.set(dependencyKey, dependencyPath);
+
+        let routes = state.dependencyRoutes.get(dependencyKey);
+        if (!routes) {
+            routes = new Set();
+            state.dependencyRoutes.set(dependencyKey, routes);
+        }
+
+        routes.add(routeKey);
+    }
+
+    state.routeDependencies.set(routeKey, nextDependencies);
+}
+
+function getRouteByPath(state: RuntimeState, filePath: string) {
+    const routeKey = normalizeFsPath(filePath);
+
+    return state.routesCache.find((route) => normalizeFsPath(route.fileInfo.filePath) === routeKey);
+}
+
+export function watchRouteDependencies(oweb: Oweb, watcher?: FSWatcher) {
+    const state = getRuntimeState(oweb);
+    const activeWatcher = watcher ?? (oweb._internalKV.get(HMR_ROUTE_WATCHER_KEY) as FSWatcher);
+
+    if (!activeWatcher) return;
+
+    activeWatcher.add(Array.from(state.dependencyFiles.values()));
+}
+
+export function setRouteHMRWatcher(oweb: Oweb, watcher: FSWatcher) {
+    oweb._internalKV.set(HMR_ROUTE_WATCHER_KEY, watcher);
+    watchRouteDependencies(oweb, watcher);
 }
 
 function createWebSocketProxy(oweb: Oweb, url: string) {
@@ -185,6 +233,72 @@ export const applyMatcherHMR = async (
     }
 };
 
+async function reloadGeneratedRoute(
+    oweb: Oweb,
+    route: GeneratedRoute,
+    source?: string,
+    preferTemporary = false,
+) {
+    const state = getRuntimeState(oweb);
+    const fresh = await importFreshModule(route.fileInfo.filePath, source);
+
+    if (fresh?.default) {
+        route.fn = fresh.default;
+    }
+
+    await refreshRouteDependencies(state, route.fileInfo.filePath, source);
+    watchRouteDependencies(oweb);
+
+    if (route.fn?.prototype instanceof WebSocketRoute) {
+        state.websocketRoutes[route.url] = new route.fn() as WebSocketRoute;
+        return;
+    }
+
+    const method = route.method.toLowerCase();
+    const nextHandler = inner(oweb, route);
+
+    if (preferTemporary && !state.routeFunctions[method][route.url]) {
+        state.temporaryRequests[method][route.url] = nextHandler;
+    } else if (state.routeFunctions[method][route.url]) {
+        state.routeFunctions[method][route.url] = nextHandler;
+    } else if (route.url in state.temporaryRequests[method]) {
+        state.temporaryRequests[method][route.url] = nextHandler;
+    } else {
+        state.routeFunctions[method][route.url] = nextHandler;
+    }
+}
+
+async function reloadRoutesAffectedByDependency(oweb: Oweb, filePath: string) {
+    const state = getRuntimeState(oweb);
+    const dependencyKey = normalizeFsPath(filePath);
+    const affectedRouteKeys = state.dependencyRoutes.get(dependencyKey);
+
+    if (!affectedRouteKeys?.size) return false;
+
+    const start = Date.now();
+
+    const routeKeys = Array.from(affectedRouteKeys);
+
+    for (const routeKey of routeKeys) {
+        const route = state.routesCache.find(
+            (candidate) => normalizeFsPath(candidate.fileInfo.filePath) === routeKey,
+        );
+
+        if (!route) continue;
+
+        try {
+            await reloadGeneratedRoute(oweb, route);
+        } catch (err: any) {
+            warn(`Route ${route.fileInfo.filePath} could not reload: ${err.message}`, 'HMR');
+        }
+    }
+
+    const end = Date.now() - start;
+    success(`${routeKeys.length} route(s) reloaded after ${filePath} changed in ${end}ms`, 'HMR');
+
+    return true;
+}
+
 // path is something like test\routes\testroute\[id].js
 export const applyRouteHMR = async (
     oweb: Oweb,
@@ -196,6 +310,11 @@ export const applyRouteHMR = async (
 ) => {
     const state = getRuntimeState(oweb);
     const normalizedChangedPath = normalizeFsPath(path);
+    const changedRoute = getRouteByPath(state, path);
+
+    if (!changedRoute && (await reloadRoutesAffectedByDependency(oweb, path))) {
+        return;
+    }
 
     if (path.endsWith('hooks.js') || path.endsWith('hooks.ts')) {
         warn(
@@ -229,26 +348,13 @@ export const applyRouteHMR = async (
             return;
         }
 
-        if (!path.endsWith('.ts') && content.length) {
-            const fresh = await importFreshModule(path, content);
-            if (fresh?.default) {
-                f.fn = fresh.default;
-            }
-        }
+        await reloadGeneratedRoute(oweb, f, content.length ? content : undefined, true);
 
         if (f.fn?.prototype instanceof WebSocketRoute) {
             assignSpecificRoute(oweb, f);
             const end = Date.now() - start;
             success(`WebSocket Route ${f.url} created in ${end}ms`, 'HMR');
             return;
-        }
-        const method = f.method.toLowerCase();
-        const nextHandler = inner(oweb, f);
-
-        if (state.routeFunctions[method][f.url]) {
-            state.routeFunctions[method][f.url] = nextHandler;
-        } else {
-            state.temporaryRequests[method][f.url] = nextHandler;
         }
         const end = Date.now() - start;
         success(`Route ${f.method.toUpperCase()}:${f.url} created in ${end}ms`, 'HMR');
@@ -267,34 +373,14 @@ export const applyRouteHMR = async (
             return;
         }
 
-        if (!path.endsWith('.ts') && content.length) {
-            const fresh = await importFreshModule(path, content);
-            if (fresh?.default) {
-                f.fn = fresh.default;
-            }
-        }
-
-        if (f.fn?.prototype instanceof WebSocketRoute) {
-            state.websocketRoutes[f.url] = new f.fn() as WebSocketRoute;
-
-            const end = Date.now() - start;
-            success(`WebSocket Route ${f.url} reloaded in ${end}ms`, 'HMR');
-            return;
-        }
-
-        const method = f.method.toLowerCase();
-        const nextHandler = inner(oweb, f);
-
-        if (state.routeFunctions[method][f.url]) {
-            state.routeFunctions[method][f.url] = nextHandler;
-        } else if (f.url in state.temporaryRequests[method]) {
-            state.temporaryRequests[method][f.url] = nextHandler;
-        } else {
-            state.routeFunctions[method][f.url] = nextHandler;
-        }
+        await reloadGeneratedRoute(oweb, f, content.length ? content : undefined);
 
         const end = Date.now() - start;
-        success(`Route ${f.method.toUpperCase()}:${f.url} reloaded in ${end}ms`, 'HMR');
+        if (f.fn?.prototype instanceof WebSocketRoute) {
+            success(`WebSocket Route ${f.url} reloaded in ${end}ms`, 'HMR');
+        } else {
+            success(`Route ${f.method.toUpperCase()}:${f.url} reloaded in ${end}ms`, 'HMR');
+        }
     } else if (op === 'delete-file') {
         const start = Date.now();
         const newFilePath = path.slice(workingDir.length).replaceAll('\\', '/').slice(0, -3);
@@ -313,6 +399,19 @@ export const applyRouteHMR = async (
 
         const f = state.routesCache.find((x) => x.method == builded.method && x.url == builded.url);
         if (f) {
+            const routeKey = normalizeFsPath(f.fileInfo.filePath);
+            const dependencies = state.routeDependencies.get(routeKey);
+
+            if (dependencies) {
+                for (const dependencyKey of dependencies) {
+                    const routes = state.dependencyRoutes.get(dependencyKey);
+                    routes?.delete(routeKey);
+                    if (!routes?.size) state.dependencyRoutes.delete(dependencyKey);
+                }
+            }
+
+            state.routeDependencies.delete(routeKey);
+
             if (f.url in state.temporaryRequests[f.method.toLowerCase()]) {
                 delete state.temporaryRequests[f.method.toLowerCase()][f.url];
             } else {
@@ -970,6 +1069,11 @@ export const assignRoutes = async (oweb: Oweb, directory: string, matchersDirect
     const routes = await generateRoutes(files, undefined, state.compiledRoutes);
 
     state.routesCache = routes;
+
+    await Promise.all(
+        routes.map((route) => refreshRouteDependencies(state, route.fileInfo.filePath)),
+    );
+    watchRouteDependencies(oweb);
 
     function fallbackHandle(req: FastifyRequest, res: FastifyReply) {
         const vals = state.temporaryRequests[req.method.toLowerCase()];

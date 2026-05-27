@@ -10,13 +10,16 @@ const FIXTURE_ROOT = path.resolve(SPEC_DIR, '..', 'fixtures');
 const ROUTES_DIR = path.join(FIXTURE_ROOT, 'routes');
 const MATCHERS_DIR = path.join(FIXTURE_ROOT, 'matchers');
 const LIVE_ROUTE_FILE = path.join(ROUTES_DIR, 'hmr', 'live.js');
+const HMR_VERSION_FILE = path.join(FIXTURE_ROOT, 'hmr-version.js');
 
 describe('HMR integration', () => {
     let server;
     let originalRouteContent;
+    let originalVersionContent;
 
     beforeAll(async () => {
         originalRouteContent = await readFile(LIVE_ROUTE_FILE, 'utf-8');
+        originalVersionContent = await readFile(HMR_VERSION_FILE, 'utf-8');
 
         server = await createTestApp({
             routesDir: ROUTES_DIR,
@@ -28,6 +31,10 @@ describe('HMR integration', () => {
     afterAll(async () => {
         if (originalRouteContent) {
             await writeFile(LIVE_ROUTE_FILE, originalRouteContent, 'utf-8');
+        }
+
+        if (originalVersionContent) {
+            await writeFile(HMR_VERSION_FILE, originalVersionContent, 'utf-8');
         }
 
         if (server?.close) await server.close();
@@ -63,5 +70,26 @@ export default class HmrLiveRoute extends Route {
 
         const second = await requestJson(server.baseUrl, '/hmr/live');
         expect(second.body).toEqual({ version: 'v2' });
+    });
+
+    it('reloads route when a deep imported dependency changes', async () => {
+        const first = await requestJson(server.baseUrl, '/hmr/dependency-live');
+        expect(first.response.status).toBe(200);
+        expect(first.body).toEqual({ message: 'helper-v1' });
+
+        await new Promise((resolve) => setTimeout(resolve, 600));
+
+        await writeFile(HMR_VERSION_FILE, `export const hmrVersion = 'v2';\n`, 'utf-8');
+
+        await waitFor(
+            async () => {
+                const current = await requestJson(server.baseUrl, '/hmr/dependency-live');
+                return current.body?.message === 'helper-v2';
+            },
+            { timeoutMs: 10000, intervalMs: 160 },
+        );
+
+        const second = await requestJson(server.baseUrl, '/hmr/dependency-live');
+        expect(second.body).toEqual({ message: 'helper-v2' });
     });
 });

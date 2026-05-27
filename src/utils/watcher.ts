@@ -20,7 +20,7 @@ export function watchDirectory(
         usePolling: true,
     });
 
-    const supportedExtensions = ['.js', '.ts'];
+    const supportedExtensions = ['.js', '.ts', '.mjs', '.mts', '.cjs', '.cts'];
     let operationQueue = Promise.resolve();
 
     const enqueueUpdate = (op: HMROperations, filePath: string) => {
