@@ -981,6 +981,31 @@ function send404(req: FastifyRequest, res: FastifyReply) {
     });
 }
 
+function runTemporaryRoute(
+    state: RuntimeState,
+    req: FastifyRequest,
+    res: FastifyReply,
+) {
+    const vals = state.temporaryRequests[req.method.toLowerCase()];
+    const requestPath = req.raw.url.split('?')[0];
+
+    if (!vals) return send404(req, res);
+
+    for (const [routePath, handler] of Object.entries(vals)) {
+        const matched = match(routePath)(requestPath);
+
+        if (!matched) continue;
+
+        (req as any).params = {
+            ...(req.params ?? {}),
+            ...matched.params,
+        };
+        return handler(req, res);
+    }
+
+    return send404(req, res);
+}
+
 function getRegisteredWebSocketsForApp(oweb: Oweb): Set<string> {
     let wsRegistry = oweb._internalKV.get(WS_REGISTRY_KEY) as Set<string> | undefined;
 
@@ -1144,23 +1169,7 @@ function assignSpecificRoute(oweb: Oweb, route: GeneratedRoute) {
                     return state.routeFunctions[route.method][route.url](req, res);
                 } else {
                     // if file was present but later renamed at HMR, this will be useful
-                    const vals = state.temporaryRequests[route.method];
-                    const keys = Object.keys(vals);
-
-                    if (!vals || !keys.length) {
-                        return send404(req, res);
-                    }
-
-                    const f = keys.find((tempName) => {
-                        const matcher = match(tempName);
-                        return matcher(req.url);
-                    });
-
-                    if (f && vals[f]) {
-                        return vals[f](req, res);
-                    } else {
-                        return send404(req, res);
-                    }
+                    return runTemporaryRoute(state, req, res);
                 }
             },
         );
@@ -1213,23 +1222,7 @@ export const assignRoutes = async (oweb: Oweb, directory: string, matchersDirect
     watchRouteDependencies(oweb);
 
     function fallbackHandle(req: FastifyRequest, res: FastifyReply) {
-        const vals = state.temporaryRequests[req.method.toLowerCase()];
-        const keys = Object.keys(vals);
-
-        if (!vals || !keys.length) {
-            return send404(req, res);
-        }
-
-        const f = keys.find((tempName) => {
-            const matcher = match(tempName);
-            return matcher(req.url);
-        });
-
-        if (f && vals[f]) {
-            return vals[f](req, res);
-        } else {
-            return send404(req, res);
-        }
+        return runTemporaryRoute(state, req, res);
     }
 
     if (oweb._internalKV.get('hmr')) {

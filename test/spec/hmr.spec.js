@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestApp } from '../helpers/app.js';
 import { requestJson, waitFor } from '../helpers/http.js';
@@ -10,6 +10,7 @@ const FIXTURE_ROOT = path.resolve(SPEC_DIR, '..', 'fixtures');
 const ROUTES_DIR = path.join(FIXTURE_ROOT, 'routes');
 const MATCHERS_DIR = path.join(FIXTURE_ROOT, 'matchers');
 const LIVE_ROUTE_FILE = path.join(ROUTES_DIR, 'hmr', 'live.js');
+const NEW_PARAM_ROUTE_FILE = path.join(ROUTES_DIR, 'hmr', 'new-users', '[id].js');
 const HMR_VERSION_FILE = path.join(FIXTURE_ROOT, 'hmr-version.js');
 const SPLIT_RUNTIME_DIR = path.join(FIXTURE_ROOT, 'split-runtime');
 const SPLIT_VERSION_FILE = path.join(SPLIT_RUNTIME_DIR, 'src', 'split-version.js');
@@ -38,6 +39,8 @@ describe('HMR integration', () => {
         if (originalVersionContent) {
             await writeFile(HMR_VERSION_FILE, originalVersionContent, 'utf-8');
         }
+
+        await rm(path.dirname(NEW_PARAM_ROUTE_FILE), { recursive: true, force: true });
 
         if (server?.close) await server.close();
     });
@@ -93,6 +96,37 @@ export default class HmrLiveRoute extends Route {
 
         const second = await requestJson(server.baseUrl, '/hmr/dependency-live');
         expect(second.body).toEqual({ message: 'helper-v2' });
+    });
+
+    it('passes params to a route added by HMR', async () => {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+
+        await mkdir(path.dirname(NEW_PARAM_ROUTE_FILE), { recursive: true });
+        await writeFile(
+            NEW_PARAM_ROUTE_FILE,
+            `
+import { Route } from 'owebjs';
+
+export default class NewUserRoute extends Route {
+    handle(req) {
+        return { id: req.params.id };
+    }
+}
+`,
+            'utf-8',
+        );
+
+        await waitFor(
+            async () => {
+                const current = await requestJson(server.baseUrl, '/hmr/new-users/42?source=hmr');
+                return current.body?.id === '42';
+            },
+            { timeoutMs: 10000, intervalMs: 160 },
+        );
+
+        const response = await requestJson(server.baseUrl, '/hmr/new-users/42?source=hmr');
+        expect(response.response.status).toBe(200);
+        expect(response.body).toEqual({ id: '42' });
     });
 });
 
